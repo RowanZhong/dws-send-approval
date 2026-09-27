@@ -1,0 +1,8 @@
+node_modules/
+artifacts/
+.local/
+.DS_Store
+*.log
+*.sqlite*
+.env
+.extraction-source-snapshot.json

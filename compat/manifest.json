@@ -1,0 +1,20 @@
+{
+  "upstream": "https://github.com/soimy/openclaw-channel-dingtalk",
+  "pullRequest": "https://github.com/soimy/openclaw-channel-dingtalk/pull/630",
+  "baseCommit": "8a73a59fd8513a89e5f2219adaec61c7c4ceab9a",
+  "interfaceCommit": "3f7994ed6895672d6336ee023906114d6feceedf",
+  "registryVersion": 1,
+  "publicEntry": "@soimy/dingtalk/card-extensions",
+  "vendoredEntrySha256": "34f5e664078da8529c6adbec345ac0d5649388f1d21585912311dd9da2520066",
+  "patchSha256": "5d9988235a0019746e334987777950838d505d27242e26e2079b4342f4b83d6a",
+  "legacy": {
+    "repository": "https://github.com/RowanZhong/openclaw-channel-dingtalk",
+    "branch": "codex/dws-reply-assistant-2026.7.1-2",
+    "verifiedCommit": "aba37a7",
+    "openclaw": "2026.7.1-2"
+  },
+  "assistantSourceCommits": {
+    "modern": "a332da7",
+    "legacy": "aba37a7"
+  }
+}

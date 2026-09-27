@@ -1,0 +1,60 @@
+{
+  "name": "dws-send-approval",
+  "version": "0.8.0",
+  "private": true,
+  "description": "Personal DingTalk reply assistant with owner cards, persistent drafts and controlled sends.",
+  "license": "MIT",
+  "files": [
+    "*.mjs",
+    "openclaw.plugin.json",
+    "config*.json",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md",
+    "docs/",
+    "templates/",
+    "vendor/",
+    "compat/",
+    "scripts/",
+    "tests/"
+  ],
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "pack:local": "node scripts/package.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "docs:build": "node scripts/render-docs.mjs",
+    "pack:check": "node scripts/verify-package.mjs",
+    "test:hosts": "node scripts/test-hosts.mjs",
+    "prepack": "npm run check && npm run docs:build"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.1-2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.mjs"
+    ],
+    "runtimeExtensions": [
+      "./index.mjs"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.7.1-2"
+    },
+    "install": {
+      "minHostVersion": ">=2026.7.1-2"
+    }
+  },
+  "devDependencies": {
+    "openclaw": "2026.8.1",
+    "vitepress": "1.6.4"
+  }
+}

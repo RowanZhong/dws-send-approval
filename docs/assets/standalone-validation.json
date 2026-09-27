@@ -1,0 +1,101 @@
+{
+  "date": "2026-09-27",
+  "version": "0.8.0",
+  "result": "passed",
+  "hosts": [
+    {
+      "version": "2026.7.1-2",
+      "unitTests": 302,
+      "failed": 0,
+      "actualSdk": [
+        "commands",
+        "permissions",
+        "dedicated-lane",
+        "tool-free-model-fixture",
+        "identity-startup-isolation"
+      ],
+      "liveCard": {
+        "backend": "legacy",
+        "passed": [
+          "owner-private-command",
+          "rendered-card",
+          "navigation",
+          "form-selection",
+          "trusted-callback",
+          "same-card-update",
+          "persisted-setting",
+          "listener-remains-off"
+        ],
+        "savedScope": "all-group-at-me"
+      }
+    },
+    {
+      "version": "2026.8.1",
+      "unitTests": 302,
+      "failed": 0,
+      "actualSdk": [
+        "commands",
+        "permissions",
+        "dedicated-lane",
+        "tool-free-model-fixture",
+        "identity-startup-isolation"
+      ],
+      "liveCard": {
+        "backend": "generic",
+        "passed": [
+          "owner-private-command",
+          "rendered-card",
+          "navigation",
+          "form-selection",
+          "trusted-callback",
+          "same-card-update",
+          "persisted-setting",
+          "listener-remains-off"
+        ],
+        "savedScope": "all-direct-messages"
+      }
+    }
+  ],
+  "migration": [
+    "legacy-card-invalidated-on-backend-change",
+    "drafts-and-settings-preserved",
+    "same-backend-restart-preserves-valid-card",
+    "no-cross-backend-retry"
+  ],
+  "channelPatch": {
+    "isolatedClone": true,
+    "applied": true,
+    "runtimeBuild": true,
+    "typesBuild": true,
+    "packageCheck": true,
+    "unrelatedEnhancements": false
+  },
+  "restoration": {
+    "configsByteIdentical": true,
+    "originalAssistantDirectoriesRestored": true,
+    "originalMainGatewayRunning": true,
+    "dingtalkConnected": true,
+    "originalAssistantFilesPerBranchUnchanged": 92,
+    "originalWorkingTreeFilesUnchanged": 68
+  },
+  "templatesChanged": false,
+  "newProcessesAdded": 0,
+  "liveLimitations": [
+    "No new friend-message, AI-drafting or as-user-send round; pre-existing business regression is retained separately.",
+    "No new performance or cluster-capacity benchmark."
+  ],
+  "notes": [
+    "Native DingTalk initially showed a gray placeholder; window resize caused normal rendering.",
+    "The initial legacy probe overlapped the new Gateway because stop required --force; excluded from legacy results. Final legacy checks ran with only its Gateway connected."
+  ],
+  "packagedConsumer": {
+    "bothActualHostSdkEntries": "passed",
+    "tarballContainsNoNodeModulesOrLocalState": true
+  },
+  "htmlPreview": {
+    "desktopBrowser": "passed",
+    "technicalInstallAndMigration": "passed",
+    "employeeCoverAndInteractivePreview": "passed",
+    "newMobileTest": false
+  }
+}

@@ -1,0 +1,657 @@
+diff --git a/index.ts b/index.ts
+index 88f741a..01faac8 100644
+--- a/index.ts
++++ b/index.ts
+@@ -5,6 +5,7 @@ import {
+ } from "openclaw/plugin-sdk/core";
+ import { readStringParam } from "openclaw/plugin-sdk/param-readers";
+ import { registerDingTalkAskUserQuestionTool } from "./src/card/ask-user-question";
++import { configureCardExtensions } from "./src/card/card-extension-service";
+ import { accumulateUsage } from "./src/card/run-usage-store";
+ import { dingtalkPlugin } from "./src/channel";
+ import {
+@@ -415,6 +416,7 @@ const dingtalkEntry = defineChannelPluginEntry({
+   plugin: dingtalkPlugin,
+   setRuntime: setDingTalkRuntime,
+   registerFull(api) {
++    configureCardExtensions(api.config);
+     registerDingTalkDocsGatewayMethods(api);
+     registerDingTalkConnectorCompatibilityGatewayMethods(api);
+     registerDingTalkAskUserQuestionTool(api);
+diff --git a/package.json b/package.json
+index 31cc439..08ca764 100644
+--- a/package.json
++++ b/package.json
+@@ -35,6 +35,10 @@
+     ".": {
+       "types": "./dist/index.d.ts",
+       "default": "./dist/index.js"
++    },
++    "./card-extensions": {
++      "types": "./dist/src/card/card-extension-api.d.ts",
++      "default": "./dist/card-extensions.js"
+     }
+   },
+   "publishConfig": {
+diff --git a/scripts/build-runtime.mjs b/scripts/build-runtime.mjs
+index 19e754d..57961d5 100644
+--- a/scripts/build-runtime.mjs
++++ b/scripts/build-runtime.mjs
+@@ -5,10 +5,10 @@ await rm("dist", { recursive: true, force: true });
+ 
+ await build({
+   bundle: true,
+-  entryPoints: ["index.ts"],
++  entryPoints: { index: "index.ts", "card-extensions": "src/card/card-extension-api.ts" },
+   format: "esm",
+   logLevel: "info",
+-  outfile: "dist/index.js",
++  outdir: "dist",
+   packages: "external",
+   platform: "node",
+   sourcemap: false,
+diff --git a/scripts/verify-runtime-package.mjs b/scripts/verify-runtime-package.mjs
+index cb6d9cf..a040347 100644
+--- a/scripts/verify-runtime-package.mjs
++++ b/scripts/verify-runtime-package.mjs
+@@ -8,7 +8,13 @@ const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scr
+ });
+ const [pack] = JSON.parse(output);
+ const files = new Set(pack.files.map((file) => String(file.path).replace(/^package\//u, "")));
+-const requiredFiles = ["dist/index.js", "dist/index.d.ts", "openclaw.plugin.json"];
++const requiredFiles = [
++  "dist/index.js",
++  "dist/index.d.ts",
++  "dist/card-extensions.js",
++  "dist/src/card/card-extension-api.d.ts",
++  "openclaw.plugin.json",
++];
+ const missingFiles = requiredFiles.filter((file) => !files.has(file));
+ const sourceMaps = [...files].filter((file) => file.endsWith(".map"));
+ 
+diff --git a/src/card/card-extension-api.ts b/src/card/card-extension-api.ts
+new file mode 100644
+index 0000000..1e35869
+--- /dev/null
++++ b/src/card/card-extension-api.ts
+@@ -0,0 +1,114 @@
++import {
++  cardExtensionKey,
++  getCardExtensionRegistry,
++  getCardExtensionStatus,
++} from "./card-extension-registry.js";
++import { DingTalkCardExtensionError } from "./card-extension-types.js";
++import type {
++  DingTalkCardExtension,
++  DingTalkCardExtensionOptions,
++  DingTalkCardVariables,
++} from "./card-extension-types.js";
++
++export { DingTalkCardExtensionError } from "./card-extension-types.js";
++export type * from "./card-extension-types.js";
++
++/** Validate before crossing the transport boundary, including callers using plain JavaScript. */
++function validateString(value: unknown, pattern: RegExp, field: string): asserts value is string {
++  if (typeof value !== "string" || !pattern.test(value)) {
++    throw new DingTalkCardExtensionError("invalid-argument", `Invalid ${field}`);
++  }
++}
++
++function copyVariables(value: DingTalkCardVariables): Record<string, string> {
++  if (!value || typeof value !== "object" || Array.isArray(value)) {
++    throw new DingTalkCardExtensionError("invalid-argument", "variables must be a string map");
++  }
++  const entries = Object.entries(value);
++  if (
++    entries.length === 0 ||
++    entries.length > 256 ||
++    entries.some(([key, item]) => !key || key.length > 128 || typeof item !== "string")
++  ) {
++    throw new DingTalkCardExtensionError("invalid-argument", "Invalid card variables");
++  }
++  const copy = Object.fromEntries(entries);
++  if (JSON.stringify(copy).length > 256 * 1024) {
++    throw new DingTalkCardExtensionError(
++      "invalid-argument",
++      "Card variables exceed 256 KiB character limit",
++    );
++  }
++  return copy;
++}
++
++/** No network, Channel import, timers or service startup occurs during registration. */
++export function registerDingTalkCardExtension(
++  options: DingTalkCardExtensionOptions,
++): DingTalkCardExtension {
++  validateString(options?.accountId, /^[a-zA-Z0-9_-]{1,64}$/, "accountId");
++  validateString(options?.namespace, /^[a-z][a-z0-9-]{0,31}$/, "namespace");
++  if (typeof options.onAction !== "function") {
++    throw new DingTalkCardExtensionError("invalid-argument", "onAction must be a function");
++  }
++  const registration = { ...options };
++  const { accountId, namespace } = registration;
++  const registry = getCardExtensionRegistry();
++  const key = cardExtensionKey(accountId, namespace);
++  if (registry.registrations.has(key)) {
++    throw new DingTalkCardExtensionError(
++      "namespace-conflict",
++      "Card extension namespace already registered for this account",
++    );
++  }
++  registry.registrations.set(key, registration);
++  let disposed = false;
++  const getStatus = () => (disposed ? ("disposed" as const) : getCardExtensionStatus(accountId));
++  const getTransport = () => {
++    const status = getStatus();
++    if (status !== "ready") {
++      throw new DingTalkCardExtensionError(status, `DingTalk card extension is ${status}`);
++    }
++    return registry.transports.get(accountId)!;
++  };
++  const trackId = (cardId: string) => {
++    validateString(cardId, /^[a-zA-Z0-9_-]{1,64}$/, "cardId");
++    const value = `ocx1.${accountId}.${namespace}.${cardId}`;
++    if (value.length > 128) {
++      throw new DingTalkCardExtensionError(
++        "invalid-argument",
++        "Composed outTrackId exceeds 128 characters",
++      );
++    }
++    return value;
++  };
++  return {
++    getStatus,
++    async sendCard(input) {
++      const outTrackId = trackId(input?.cardId);
++      validateString(input.templateId, /^[a-zA-Z0-9._-]{1,128}$/, "templateId");
++      validateString(input.userId, /^[a-zA-Z0-9._@-]{1,128}$/, "userId");
++      const variables = copyVariables(input.variables);
++      await getTransport().send({
++        cardId: input.cardId,
++        templateId: input.templateId,
++        userId: input.userId,
++        variables,
++        outTrackId,
++      });
++      return { outTrackId };
++    },
++    async updateCard(input) {
++      const outTrackId = trackId(input?.cardId);
++      const variables = copyVariables(input.variables);
++      await getTransport().update({ cardId: input.cardId, variables, outTrackId });
++      return { outTrackId };
++    },
++    dispose() {
++      disposed = true;
++      if (registry.registrations.get(key) === registration) {
++        registry.registrations.delete(key);
++      }
++    },
++  };
++}
+diff --git a/src/card/card-extension-callback.ts b/src/card/card-extension-callback.ts
+new file mode 100644
+index 0000000..b31c161
+--- /dev/null
++++ b/src/card/card-extension-callback.ts
+@@ -0,0 +1,100 @@
++import type { Logger } from "../platform/types";
++import { resolveCardExtensionHandler } from "./card-extension-registry";
++
++function record(value: unknown): Record<string, unknown> | undefined {
++  return value !== null && typeof value === "object" && !Array.isArray(value)
++    ? (value as Record<string, unknown>)
++    : undefined;
++}
++
++function embedded(value: unknown): Record<string, unknown> | undefined {
++  if (typeof value === "string") {
++    try {
++      return record(JSON.parse(value));
++    } catch {
++      return undefined;
++    }
++  }
++  return record(value);
++}
++
++/** Run before builtin analysis: even builtin-looking action IDs belong only to this card's owner. */
++export async function dispatchCardExtensionCallback(params: {
++  accountId: string;
++  payload: unknown;
++  callbackId?: string;
++  log?: Logger;
++}): Promise<boolean> {
++  const root = record(params.payload);
++  const outTrackId = root?.outTrackId;
++  if (typeof outTrackId !== "string" || !outTrackId.startsWith("ocx1.")) {
++    return false;
++  }
++  // This reserved prefix is consumed even after a consumer is uninstalled.
++  // Inner/form fields must never supply identity, account or routing identifiers.
++  const match = /^ocx1\.([a-zA-Z0-9_-]{1,64})\.([a-z][a-z0-9-]{0,31})\.([a-zA-Z0-9_-]{1,64})$/.exec(
++    outTrackId,
++  );
++  const userId = root?.userId;
++  if (
++    !match ||
++    outTrackId.length > 128 ||
++    match[1] !== params.accountId ||
++    typeof userId !== "string" ||
++    !/^[a-zA-Z0-9._@-]{1,128}$/.test(userId)
++  ) {
++    params.log?.warn?.(
++      "[DingTalk][CardExtension] Ignored callback with invalid outer identity or route",
++    );
++    return true;
++  }
++  const [, accountId, namespace, cardId] = match;
++  try {
++    const handler = resolveCardExtensionHandler(accountId, namespace);
++    if (!handler) {
++      params.log?.debug?.(
++        `[DingTalk][CardExtension] No handler account=${accountId} namespace=${namespace}`,
++      );
++      return true;
++    }
++    const content = embedded(root?.content) ?? embedded(root?.value) ?? root;
++    const privateData = embedded(content?.cardPrivateData);
++    const actionIds = privateData?.actionIds;
++    if (
++      !Array.isArray(actionIds) ||
++      actionIds.length === 0 ||
++      actionIds.length > 32 ||
++      actionIds.some((id) => typeof id !== "string" || !id || id.length > 128)
++    ) {
++      params.log?.warn?.("[DingTalk][CardExtension] Ignored callback with invalid action IDs");
++      return true;
++    }
++    const formInput = record(record(privateData?.params)?.form) ?? {};
++    const form = Object.fromEntries(
++      Object.entries(formInput).map(([key, value]) => {
++        const wrapper = record(value);
++        return [key, wrapper && Object.hasOwn(wrapper, "value") ? wrapper.value : value];
++      }),
++    );
++    await handler({
++      accountId,
++      namespace,
++      cardId,
++      outTrackId,
++      userId,
++      callbackId: params.callbackId,
++      actionIds: [...actionIds],
++      form,
++    });
++    params.log?.debug?.(
++      `[DingTalk][CardExtension] Handled callback account=${accountId} namespace=${namespace} card=${cardId}`,
++    );
++  } catch {
++    // An extension can throw submitted text or credentials. Keep errors metadata-only,
++    // and never fall through to another handler. Gateway owns the Stream ACK.
++    params.log?.error?.(
++      `[DingTalk][CardExtension] Callback failed account=${accountId} namespace=${namespace} card=${cardId}`,
++    );
++  }
++  return true;
++}
+diff --git a/src/card/card-extension-registry.ts b/src/card/card-extension-registry.ts
+new file mode 100644
+index 0000000..ca649b0
+--- /dev/null
++++ b/src/card/card-extension-registry.ts
+@@ -0,0 +1,78 @@
++import { DingTalkCardExtensionError } from "./card-extension-types.js";
++import type {
++  DingTalkCardAction,
++  DingTalkCardExtensionOptions,
++  DingTalkCardExtensionStatus,
++  DingTalkCardSendOptions,
++  DingTalkCardUpdateOptions,
++} from "./card-extension-types.js";
++
++export interface CardExtensionTransport {
++  isConnected(): boolean;
++  send(options: DingTalkCardSendOptions & { outTrackId: string }): Promise<void>;
++  update(options: DingTalkCardUpdateOptions & { outTrackId: string }): Promise<void>;
++}
++
++interface CardExtensionRegistry {
++  version: 1;
++  registrations: Map<string, DingTalkCardExtensionOptions>;
++  transports: Map<string, CardExtensionTransport>;
++  accountStatus?: (accountId: string) => "configured" | "account-unconfigured" | "account-disabled";
++}
++
++// Both the Channel bundle and independently bundled consumers must use the same
++// registry. Keep this protocol versioned; never silently share incompatible state.
++const REGISTRY_KEY = Symbol.for("openclaw.dingtalk.card-extensions");
++
++export function getCardExtensionRegistry(): CardExtensionRegistry {
++  const globals = globalThis as typeof globalThis & { [REGISTRY_KEY]?: CardExtensionRegistry };
++  const existing = globals[REGISTRY_KEY];
++  if (existing && existing.version !== 1) {
++    throw new DingTalkCardExtensionError(
++      "version-mismatch",
++      "Incompatible DingTalk card extension API",
++    );
++  }
++  return (globals[REGISTRY_KEY] ??= {
++    version: 1,
++    registrations: new Map(),
++    transports: new Map(),
++  });
++}
++
++export function cardExtensionKey(accountId: string, namespace: string): string {
++  return `${accountId}.${namespace}`;
++}
++
++export function getCardExtensionStatus(accountId: string): DingTalkCardExtensionStatus {
++  const registry = getCardExtensionRegistry();
++  if (!registry.accountStatus) {
++    return "unavailable";
++  }
++  const status = registry.accountStatus(accountId);
++  if (status !== "configured") {
++    return status;
++  }
++  return registry.transports.get(accountId)?.isConnected() ? "ready" : "not-connected";
++}
++
++export function bindCardExtensionTransport(
++  accountId: string,
++  transport: CardExtensionTransport,
++): () => void {
++  const registry = getCardExtensionRegistry();
++  registry.transports.set(accountId, transport);
++  return () => {
++    if (registry.transports.get(accountId) === transport) {
++      registry.transports.delete(accountId);
++    }
++  };
++}
++
++export function resolveCardExtensionHandler(
++  accountId: string,
++  namespace: string,
++): ((action: DingTalkCardAction) => void | Promise<void>) | undefined {
++  return getCardExtensionRegistry().registrations.get(cardExtensionKey(accountId, namespace))
++    ?.onAction;
++}
+diff --git a/src/card/card-extension-service.ts b/src/card/card-extension-service.ts
+new file mode 100644
+index 0000000..4f49802
+--- /dev/null
++++ b/src/card/card-extension-service.ts
+@@ -0,0 +1,103 @@
++import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
++import { getAccessToken } from "../platform/auth";
++import {
++  listDingTalkAccountIds,
++  resolveDingTalkAccount,
++  resolveRobotCode,
++} from "../platform/config";
++import type { DingTalkConfig, Logger } from "../platform/types";
++import httpClient from "../shared/http-client";
++import { getProxyBypassOption } from "../shared/utils";
++import { getCardExtensionRegistry } from "./card-extension-registry";
++import type { CardExtensionTransport } from "./card-extension-registry";
++import { DingTalkCardExtensionError } from "./card-extension-types";
++
++/** Registration is local-only. Disabled/unknown accounts must not inherit default credentials. */
++export function configureCardExtensions(cfg: OpenClawConfig): void {
++  getCardExtensionRegistry().accountStatus = (accountId) => {
++    if (!listDingTalkAccountIds(cfg).includes(accountId)) {
++      return "account-unconfigured";
++    }
++    const account = resolveDingTalkAccount(cfg, accountId);
++    if (
++      (cfg.channels?.dingtalk as { enabled?: boolean } | undefined)?.enabled === false ||
++      account.enabled === false
++    ) {
++      return "account-disabled";
++    }
++    return account.configured ? "configured" : "account-unconfigured";
++  };
++}
++
++export function createCardExtensionTransport(params: {
++  config: DingTalkConfig;
++  log?: Logger;
++  isConnected: () => boolean;
++}): CardExtensionTransport {
++  const { config, log, isConnected } = params;
++  const request = async (method: "post" | "put", body: Record<string, unknown>) => {
++    try {
++      const token = await getAccessToken(config, log);
++      // Account may have stopped while a token was being refreshed.
++      if (!isConnected()) {
++        throw new DingTalkCardExtensionError("not-connected", "DingTalk account disconnected");
++      }
++      const response = await httpClient[method](
++        `https://api.dingtalk.com/v1.0/card/instances${method === "post" ? "/createAndDeliver" : ""}`,
++        body,
++        {
++          headers: { "x-acs-dingtalk-access-token": token, "Content-Type": "application/json" },
++          timeout: 15_000,
++          ...getProxyBypassOption(config),
++        },
++      );
++      const data = response.data as
++        | { success?: boolean; result?: { deliverResults?: Array<{ success?: boolean }> } }
++        | undefined;
++      if (
++        response.status < 200 ||
++        response.status >= 300 ||
++        data?.success === false ||
++        data?.result?.deliverResults?.some((item) => item.success === false)
++      ) {
++        throw new DingTalkCardExtensionError(
++          "request-failed",
++          "DingTalk card request or delivery failed",
++        );
++      }
++    } catch (error) {
++      if (error instanceof DingTalkCardExtensionError) {
++        throw error;
++      }
++      // Axios errors can retain token headers, variables and server-echoed input.
++      // Do not expose their cause/body to consumers or log them here.
++      const status = httpClient.isAxiosError(error) ? error.response?.status : undefined;
++      throw new DingTalkCardExtensionError(
++        "request-failed",
++        `DingTalk card request failed${typeof status === "number" ? ` (HTTP ${status})` : ""}`,
++      );
++    }
++  };
++  return {
++    isConnected,
++    async send({ outTrackId, templateId, userId, variables }) {
++      await request("post", {
++        outTrackId,
++        cardTemplateId: templateId,
++        cardData: { cardParamMap: variables },
++        callbackType: "STREAM",
++        userIdType: 1,
++        openSpaceId: `dtv1.card//IM_ROBOT.${userId}`,
++        imRobotOpenSpaceModel: { supportForward: false },
++        imRobotOpenDeliverModel: { spaceType: "IM_ROBOT", robotCode: resolveRobotCode(config) },
++      });
++    },
++    async update({ outTrackId, variables }) {
++      await request("put", {
++        outTrackId,
++        cardData: { cardParamMap: variables },
++        cardUpdateOptions: { updateCardDataByKey: true },
++      });
++    },
++  };
++}
+diff --git a/src/card/card-extension-types.ts b/src/card/card-extension-types.ts
+new file mode 100644
+index 0000000..3599949
+--- /dev/null
++++ b/src/card/card-extension-types.ts
+@@ -0,0 +1,70 @@
++/** Variables must already be encoded as DingTalk cardParamMap strings. */
++export type DingTalkCardVariables = Readonly<Record<string, string>>;
++
++export type DingTalkCardExtensionStatus =
++  | "ready"
++  | "unavailable"
++  | "account-unconfigured"
++  | "account-disabled"
++  | "not-connected"
++  | "disposed";
++
++export type DingTalkCardExtensionErrorCode =
++  | Exclude<DingTalkCardExtensionStatus, "ready">
++  | "version-mismatch"
++  | "invalid-argument"
++  | "namespace-conflict"
++  | "request-failed";
++
++/** Inspect code, not instanceof: consumers may bundle a separate copy of this entry. */
++export class DingTalkCardExtensionError extends Error {
++  constructor(
++    public readonly code: DingTalkCardExtensionErrorCode,
++    message: string,
++  ) {
++    super(message);
++    this.name = "DingTalkCardExtensionError";
++  }
++}
++
++export interface DingTalkCardAction {
++  /** Supplied by the receiving Channel connection, never by form input. */
++  accountId: string;
++  namespace: string;
++  cardId: string;
++  outTrackId: string;
++  /** DingTalk Stream's outer userId (enterprise staffId). Authorization remains the consumer's job. */
++  userId: string;
++  /** Stream envelope ID, when available; not an exactly-once guarantee. */
++  callbackId?: string;
++  /** Untrusted template/form data. */
++  actionIds: readonly string[];
++  form: Readonly<Record<string, unknown>>;
++}
++
++export interface DingTalkCardExtensionOptions {
++  accountId: string;
++  namespace: string;
++  onAction: (action: DingTalkCardAction) => void | Promise<void>;
++}
++
++export interface DingTalkCardSendOptions {
++  /** Stable business ID; reuse this ID when reconciling an uncertain create result. */
++  cardId: string;
++  templateId: string;
++  userId: string;
++  variables: DingTalkCardVariables;
++}
++
++export interface DingTalkCardUpdateOptions {
++  cardId: string;
++  variables: DingTalkCardVariables;
++}
++
++export interface DingTalkCardExtension {
++  getStatus(): DingTalkCardExtensionStatus;
++  sendCard(options: DingTalkCardSendOptions): Promise<{ outTrackId: string }>;
++  updateCard(options: DingTalkCardUpdateOptions): Promise<{ outTrackId: string }>;
++  /** Stops future dispatch. Does not cancel an already executing callback or HTTP request. */
++  dispose(): void;
++}
+diff --git a/src/gateway/channel-gateway.ts b/src/gateway/channel-gateway.ts
+index 34c107e..8c74efc 100644
+--- a/src/gateway/channel-gateway.ts
++++ b/src/gateway/channel-gateway.ts
+@@ -10,6 +10,9 @@ import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+ import { recoverAskUserQuestionsForAccount } from "../card/ask-user-question";
+ import { handleCardAction } from "../card/card-action-handler";
+ import { analyzeCardCallback } from "../card/card-callback-service";
++import { dispatchCardExtensionCallback } from "../card/card-extension-callback";
++import { bindCardExtensionTransport } from "../card/card-extension-registry";
++import { createCardExtensionTransport } from "../card/card-extension-service";
+ import { finalizeActiveCardsForAccount, recoverPendingCardsForAccount } from "../card/card-service";
+ import {
+   isLearningAutoApplyEnabled,
+@@ -368,8 +371,27 @@ export function createDingTalkGateway(): NonNullable<DingTalkChannelPlugin["gate
+         );
+       }
+ 
++      // The transport exists only for this account lifecycle; connection status
++      // is read at call time so reconnects do not require consumer re-registration.
++      let cardTransportActive = true;
++      let cardTransportConnected = false;
++      const releaseCardTransport = bindCardExtensionTransport(
++        account.accountId,
++        createCardExtensionTransport({
++          config,
++          log: pluginLog,
++          isConnected: () => cardTransportActive && cardTransportConnected && !abortSignal?.aborted,
++        }),
++      );
++      const closeCardTransport = () => {
++        cardTransportActive = false;
++        releaseCardTransport();
++      };
+       const useConnectionManager = config.useConnectionManager ?? true;
+       const applyStatusPatch = (patch: Record<string, unknown>) => {
++        if (typeof patch.connected === "boolean") {
++          cardTransportConnected = patch.connected;
++        }
+         ctx.setStatus({
+           ...ctx.getStatus(),
+           ...patch,
+@@ -508,6 +530,16 @@ export function createDingTalkGateway(): NonNullable<DingTalkChannelPlugin["gate
+ 
+           try {
+             const payload = JSON.parse(res.data);
++            if (
++              await dispatchCardExtensionCallback({
++                accountId: account.accountId,
++                payload,
++                callbackId: messageId,
++                log: pluginLog,
++              })
++            ) {
++              return;
++            }
+             const analysis = analyzeCardCallback(payload);
+             pluginLog?.info?.(
+               `[${account.accountId}] [DingTalk][CardCallback] action=${analysis.summary} raw=${JSON.stringify(payload)}`,
+@@ -589,6 +621,7 @@ export function createDingTalkGateway(): NonNullable<DingTalkChannelPlugin["gate
+           return;
+         }
+         stopped = true;
++        closeCardTransport();
+         pluginLog?.info?.(`[${account.accountId}] Stopping DingTalk Stream client...`);
+         void finalizeActiveCardsForAccount(
+           config,
+@@ -640,6 +673,7 @@ export function createDingTalkGateway(): NonNullable<DingTalkChannelPlugin["gate
+             lastError: "Connection aborted before start",
+           });
+ 
++          closeCardTransport();
+           throw new Error("Connection aborted before start");
+         }
+ 
+@@ -685,6 +719,7 @@ export function createDingTalkGateway(): NonNullable<DingTalkChannelPlugin["gate
+             lastEventAt: getCurrentTimestamp(),
+             lastError: err.message || "Connection failed",
+           });
++          closeCardTransport();
+           throw err;
+         }
+ 
+@@ -786,6 +821,7 @@ export function createDingTalkGateway(): NonNullable<DingTalkChannelPlugin["gate
+           lastEventAt: getCurrentTimestamp(),
+           lastError: err.message || "Connection failed",
+         });
++        closeCardTransport();
+         throw err;
+       }
+ 
