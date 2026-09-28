@@ -19,6 +19,11 @@ export function draftFailure(error) {
         : "DRAFT_FAILED";
   const messages = {
     LLM_DRAFT_INPUT_TOO_LONG: "本批来信超过起草容量，未截断生成回复。请查看来信并手动填写。",
+    LLM_DRAFT_READONLY_POLICY: "无法确认 Agent 的只读权限；请核对专用 Agent、查询工具允许清单、独立工作目录和运行方式。可关闭工具起草继续使用普通 AI，或手动填写。",
+    LLM_DRAFT_RUN_UNSETTLED: "上一次 Agent 任务尚未确认结束，暂不重复启动。已停止采用迟到输出；可手动填写，稍后核实任务状态。",
+    LLM_DRAFT_AGENT_FAILED: "Agent 起草未成功，可重试起草或手动填写。",
+    LLM_DRAFT_EMPTY_RESULT: "Agent 未返回有效的最终回复正文，可重试起草或手动填写。",
+    LLM_DRAFT_QUERY_FAILED: "读取资料未成功，可补充资料或关闭工具后重新起草。",
     LLM_COMPLETION_NOT_AUTHORIZED:
       "拟稿的 Agent 选择未获宿主授权，请管理员核对默认 Agent 与插件 agentId；可点“修改”手动填写回复。",
     LLM_DRAFT_AGENT_NOT_CONFIGURED:

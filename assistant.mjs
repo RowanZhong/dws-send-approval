@@ -7,11 +7,12 @@ import { createCardTransport } from "./card-transport.mjs";
 import { createCardUpdateQueue } from "./card-update-queue.mjs";
 import { fixedReplyRows } from "./assistant-fixed-rules.mjs";
 import { createContextReader, messageTime } from "./assistant-context.mjs";
+import { createDraftRuntime } from "./assistant-draft-runtime.mjs";
 import { batchKey, batchContent, batchMembers, nextBatch, createBatchQueue } from "./assistant-batches.mjs";
 import { cardFormFields } from "./assistant-card-protocol.mjs";
 import { resolveTargets, splitTargets, resolveDisplayLabels, targetInput } from "./assistant-directory.mjs";
 import { sendExact } from "./assistant-dws.mjs";
-import { draftReply, draftFailure } from "./assistant-model.mjs";
+import { draftFailure } from "./assistant-model.mjs";
 import {
   unnotifiedDrafts,
   rememberNotification,
@@ -66,7 +67,8 @@ export function createAssistant(api, config, dependencies = {}) {
   const store = dependencies.store ?? new AssistantStore(config),
     now = dependencies.now ?? Date.now;
   const sender = dependencies.send ?? ((d) => sendExact(config, d));
-  const complete = dependencies.draft ?? ((d, h, m, s) => draftReply(api, config, d, h, m, s));
+  const complete = dependencies.draft ?? ((d, h, m, s) => drafting.draft(d, h, m, s));
+  const drafting = createDraftRuntime(api, config, { store, now, runner: dependencies.draftToolRunner, auditTools: dependencies.auditDraftTools });
   const resolve =
     dependencies.resolve ??
     ((kind, raw, existing) =>
@@ -264,6 +266,7 @@ export function createAssistant(api, config, dependencies = {}) {
       for (const card of store.pendingCardDeliveries(now())) {
         try { await recoverDelivery(card); } catch { /* Same-card update only; never replay a send. */ }
       }
+      await drafting.reconcile();
     } finally {
       maintenanceBusy = false;
     }
@@ -445,14 +448,15 @@ export function createAssistant(api, config, dependencies = {}) {
     } catch (error) {
       const failed = store.getCard(card.id);
       if (failed) store.card({ ...failed, retryUpdate: Boolean(replace),
+        deliveryState: replace ? "pending" : "unknown",
         deliveryAttempts: 1, nextDeliveryAttemptAt: now() + 30000 });
-      if (!replace) throw error;
+      if (!replace) throw Object.assign(new Error("新卡投递结果待核实；未自动重发，可发送 /dws 主动打开助手。"), { code: "DWS_CARD_DELIVERY_UNKNOWN", cause: error });
       throw Object.assign(new Error("卡片暂时无法更新。"), { code: "DWS_CARD_UPDATE_FAILED", cause: error });
     }
     card.deliveryState = "delivered";
     const delivered = store.cardForTrack(outTrackId);
     if (delivered?.id === card.id) store.card({ ...delivered, deliveryState: "delivered" });
-    // Record only after successful delivery/update; failed sends remain retryable.
+    // Record successful coverage; uncertain creates keep their own reservation.
     rememberNotification(store, card, view.notificationRefs ?? view.refs, now());
     if (!replace) track(maintenance());
     return card;
@@ -1116,6 +1120,7 @@ export function createAssistant(api, config, dependencies = {}) {
   }
   return {
     store,
+    drafting,
     bind(value) {
       listener = value;
     },
@@ -1130,6 +1135,7 @@ export function createAssistant(api, config, dependencies = {}) {
     has: (event) => !closed && store.seen(messageKey(event, config.profile)),
     async start(ctx) {
       await store.open(ctx.stateDir);
+      await drafting.start(ctx.stateDir);
       try { managedTransport?.start(); } catch (error) { store.close(); throw error; }
       closed = false;
       observedTransport = undefined;
@@ -1159,6 +1165,8 @@ export function createAssistant(api, config, dependencies = {}) {
       clearInterval(cleanupTimer);
       notifications.stop();
       batches.stop();
+      drafting.stop();
+      contextReader.clear();
       signal?.abort();
       managedTransport?.stop();
       await Promise.allSettled([...jobs, modelQueue]);

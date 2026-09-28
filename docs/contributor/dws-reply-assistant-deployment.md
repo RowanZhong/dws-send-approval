@@ -10,7 +10,7 @@
 - 保留偏好 fixed、autoRules 和主题规则的原存储格式，新增 fixedRules 缺省空数组。统一入口不隐式迁移或扩大授权，过期规则在显式最终确认后才更新期限。
 - assistant.context.historyMinutes 默认 5、0 关闭；读取同会话并限定双方，最多 50 条、12000 字符，按时间排序且去重触发消息；使用可用文字投影，不下载附件。
 - assistant.directBatch.mergeGapSeconds 默认 30；每批最长 5 分钟、最多 200 条；批次只保存成员引用。草稿版本隔离迟到输出，发送领取后冻结批次，超长输入显式失败。
-- assistant.drafting.toolsEnabled 默认 false；四项工具适配器、会话/任务绑定及执行前复核先行加入。未接入起草执行器的中间提交不注册可执行能力，不运行 Agent；受保护会话默认拒绝。
+- 通过宿主 subagent 的独立会话执行，deliver:false；专用 Agent 的精确工具集、独立目录、OpenClaw runtime、Code Mode 关闭及已审计插件均须预检。默认 120 秒预算，持久化任务状态并清理已结束会话。宿主按 Agent 的配置差异以 2026.7.1-2/2026.8.1 实测为准。
 
 <!-- staged-upgrade:end -->
 

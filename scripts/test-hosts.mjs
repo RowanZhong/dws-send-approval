@@ -21,7 +21,7 @@ for (const supplied of hosts) {
     const tests = readdirSync(join(folder, "tests")).filter((f) => f.endsWith(".test.mjs"));
     execFileSync(process.execPath, ["--test", ...tests.map((f) => join(folder, "tests", f))],
       { cwd: folder, env, stdio: "inherit" });
-    for (const name of ["verify-host", "verify-assistant-host", "verify-model-host", "verify-identity-startup"])
+    for (const name of ["verify-host", "verify-assistant-host", "verify-model-host", "verify-identity-startup", "verify-draft-host"])
       execFileSync(process.execPath, [join(folder, "scripts", name + ".mjs"), host],
         { cwd: folder, env, stdio: "inherit" });
     console.log(JSON.stringify({ version, result: "passed" }));

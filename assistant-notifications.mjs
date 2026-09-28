@@ -69,8 +69,12 @@ export function createNotificationQueue({
       if (sent !== false) lastSent = now();
       retryAt = 0;
       if (next === captured) firstAt = undefined;
-    } catch {
-      retryAt = now() + 30000;
+    } catch (error) {
+      if (error?.code === "DWS_CARD_DELIVERY_UNKNOWN") {
+        acknowledged = captured;
+        if (next === captured) firstAt = undefined;
+        retryAt = 0;
+      } else retryAt = now() + 30000;
       failed();
     } finally {
       busy = false;

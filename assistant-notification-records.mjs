@@ -14,6 +14,8 @@ export function unnotifiedDrafts(store, rows, now) {
   const coverage = store.get(KEY) ?? {},
     live = liveTracks(store, now);
   return rows.filter((d) => {
+    if (store.listCards().some((c) => c.lane === "notification" && c.deliveryState === "unknown" &&
+      (c.notificationRefs ?? c.refs ?? []).some((r) => r.id === d.id && r.version === d.version))) return false;
     const record = coverage[d.id];
     return !record || record.version !== d.version || !live.has(record.track);
   });
