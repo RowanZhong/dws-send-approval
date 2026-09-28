@@ -8,6 +8,7 @@
 - assistant.storage 默认 retentionDays=7、expiredCardRetentionHours=24、cleanupIntervalSeconds=300、dedupeRetentionDays=30；assistant.cards.expiryCheckSeconds=10。正文与去重指纹分离，清理有数量上限，保留可见有效卡片和未决发送；SQLite 删除产生可复用页，不等同文件压缩。
 - 继续读取 version:1 和原有 fallback/only 枚举；分类原因仅作诊断，不新增用户第三态。主题策略或规则修订后，发送前再次检查版本，恢复不补发。
 - 保留偏好 fixed、autoRules 和主题规则的原存储格式，新增 fixedRules 缺省空数组。统一入口不隐式迁移或扩大授权，过期规则在显式最终确认后才更新期限。
+- assistant.context.historyMinutes 默认 5、0 关闭；读取同会话并限定双方，最多 50 条、12000 字符，按时间排序且去重触发消息；使用可用文字投影，不下载附件。
 
 <!-- staged-upgrade:end -->
 

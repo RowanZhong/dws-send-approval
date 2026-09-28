@@ -151,6 +151,19 @@
                 "default": 30
               }
             }
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "historyMinutes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 60,
+                "default": 5,
+                "description": "近期对话文字窗口（分钟），0 关闭；不读取附件"
+              }
+            }
           }
         }
       }

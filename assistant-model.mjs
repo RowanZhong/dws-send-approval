@@ -38,6 +38,7 @@ export async function draftReply(api, config, draft, hint = "", material = "", s
           requirements: draft.reply.text,
           externalMessage: draft.event.content.slice(0, 8000),
           conversationContext: draft.context ?? [],
+          contextStatus: draft.contextStatus,
           hint: hint.slice(0, 2000),
           ownerMaterial: material.slice(0, 12000),
         }),

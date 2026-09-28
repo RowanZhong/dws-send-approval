@@ -64,6 +64,12 @@ export function readConfig(raw = {}, { discovery = false } = {}) {
   }
   if (storage.dedupeRetentionDays < storage.retentionDays) throw new Error("dedupe retention cannot be shorter than body retention");
   assistant.storage = Object.freeze(storage);
+  const context = { historyMinutes: 5, ...assistant.context };
+  if ((assistant.context !== undefined && (!assistant.context || typeof assistant.context !== "object" || Array.isArray(assistant.context))) ||
+      !Number.isInteger(context.historyMinutes) || context.historyMinutes < 0 || context.historyMinutes > 60) {
+    throw new Error("assistant.context.historyMinutes must be 0..60");
+  }
+  assistant.context = Object.freeze(context);
   if (
     typeof assistant.enabled !== "boolean" ||
     typeof assistant.cardTemplateId !== "string" ||

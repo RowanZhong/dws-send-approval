@@ -212,6 +212,8 @@ export function createIdentityService(api, config, dependencies = {}) {
     const resolved = Object.freeze({
       ...config,
       profile: binding.profile,
+      // Verified owner identity, never infer it from the bot exclusion list.
+      get ownerOpenId() { return record?.owner?.openId; },
       listener: Object.freeze({
         ...config.listener,
         get ignoreSenderOpenIds() {

@@ -21,14 +21,16 @@ test("text fallback binds version and exposes literal full text without creating
   await f.assistant.command("ok", { id: d.id, version: next.version });
   assert.equal(f.sends.length, 1);
 });
-test("model context is bounded to five earlier messages in exactly the same conversation", async (t) => {
-  const f = await fixture(t);
+test("model context is bounded by time and contains only the same conversation participants", async (t) => {
+  const timestamp = Date.now();
+  const f = await fixture(t, { historyRunner: async () => ({ contractVersion: "im.message-list.v1", complete: true,
+    messages: Array.from({ length: 8 }, (_, i) => ({ messageId: `h${i}`, conversationId: "one", senderId: "B", messageType: "text", text: `message-${i}`, createTime: timestamp - (8 - i) * 60000 })) }) });
   await f.incoming(f.event({ conversation_id: "private-other", content: "不应出现在本会话" }));
   for (let i = 0; i < 8; i++)
     await f.incoming(f.event({ conversation_id: "one", content: `message-${i}` }));
   const data = f.models.at(-1)[0];
-  assert.equal(data.context.length, 5);
-  assert.equal(data.context[0].message, "message-2");
+  assert.equal(data.context.length, 4);
+  assert.equal(data.context[0].message, "message-4");
   assert.ok(!JSON.stringify(data).includes("不应出现在本会话"));
 });
 test("expired cards and drafts cannot authorize sends", async (t) => {
@@ -135,6 +137,7 @@ test("slow model does not prevent independent messages from durable admission", 
   await f.admit(f.event({ conversation_id: "one" }));
   await f.admit(f.event({ conversation_id: "two" }));
   assert.equal(f.assistant.store.list(["generating"]).length, 2);
+  await new Promise(setImmediate);
   assert.equal(releases.length, 1);
   releases[0]("第一条");
   await new Promise(setImmediate);

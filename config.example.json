@@ -47,6 +47,9 @@
               "expiredCardRetentionHours": 24,
               "cleanupIntervalSeconds": 300,
               "dedupeRetentionDays": 30
+            },
+            "context": {
+              "historyMinutes": 5
             }
           }
         }

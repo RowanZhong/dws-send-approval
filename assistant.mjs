@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { createCardTransport } from "./card-transport.mjs";
 import { createCardUpdateQueue } from "./card-update-queue.mjs";
 import { fixedReplyRows } from "./assistant-fixed-rules.mjs";
+import { createContextReader } from "./assistant-context.mjs";
 import { cardFormFields } from "./assistant-card-protocol.mjs";
 import { resolveTargets, splitTargets, resolveDisplayLabels, targetInput } from "./assistant-directory.mjs";
 import { sendExact } from "./assistant-dws.mjs";
@@ -82,6 +83,7 @@ export function createAssistant(api, config, dependencies = {}) {
   const jobs = new Set();
   const cardUpdates = createCardUpdateQueue();
   const cardRecoveries = new Map();
+  const contextReader = createContextReader(config, { runner: dependencies.historyRunner, now });
   const topicQueue = createTopicQueue({ complete: dependencies.classify ?? ((content, rules, signal) => classifyTopic(api, config, content, rules, signal)), now, ...dependencies.topicQueueOptions });
   const classify = async (content, rules, valid) => normalizeTopicDecision(
     await topicQueue.run(content, rules, signal?.signal, valid), rules);
@@ -585,11 +587,11 @@ export function createAssistant(api, config, dependencies = {}) {
     });
     const version = d.version;
     try {
-      const context = store.conversation(d.event.conversation_id, d.id, 5).map((row) => ({
-        sender: row.event.sender_open_dingtalk_id,
-        message: row.event.content.slice(0, 1600),
-        ...(row.status === "sent" ? { reply: row.text } : {}),
-      }));
+      const history = await contextReader.read(d);
+      const latestBeforeModel = store.draft(d.id);
+      if (closed || latestBeforeModel?.version !== version || latestBeforeModel.status !== "generating") return;
+      const { messages: context, ...contextStatus } = history;
+      d = store.put({ ...latestBeforeModel, contextStatus });
       const body = await model({ ...d, context }, hint, material);
       const latest = store.draft(d.id);
       if (!closed && latest?.version === version && latest.status === "generating") {
