@@ -1,0 +1,72 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { fixture } from "./assistant-fixture.mjs";
+import { initialSettings, validateSettings } from "../assistant-settings.mjs";
+import { fixedReplyRows } from "../assistant-fixed-rules.mjs";
+
+test("old settings retain authorization IDs, scope and absolute expiry", async (t) => {
+  const f = await fixture(t);
+  const old = initialSettings(); delete old.fixedRules;
+  old.autoRules = [{ id: "old", scope: "dm", target: "", text: "收到", keywords: [], expires: Date.now() + 3600000, cooldownMinutes: 30 }];
+  f.prefs.reply.default = { mode: "fixed", text: "确认正文" };
+  const next = validateSettings(old);
+  assert.deepEqual(next.autoRules, old.autoRules); assert.deepEqual(next.fixedRules, []);
+  const rows = fixedReplyRows(f.prefs, next);
+  assert.deepEqual(rows.map((r) => r.delivery), ["confirm", "auto"]);
+  assert.equal(rows[1].id, "old"); assert.equal(next.version, 1);
+});
+test("new fixed reply defaults to confirmation and creates no automatic authorization", async (t) => {
+  const f = await fixture(t);
+  await f.act(await f.assistant.show("fixed-new"), "fixed-start");
+  await f.act(f.lastCard(), "auto-next", { scope: "dm" });
+  await f.act(f.lastCard(), "auto-next", { answer: "已收到，我稍后查看。" });
+  assert.equal(f.lastCard().name, "auto-review");
+  assert.equal(f.assistant.store.get("settings").fixedRules.length, 0);
+  await f.act(f.lastCard(), "save-auto", { delivery: "auto", answer: "伪造" });
+  assert.equal(f.assistant.store.get("settings").autoRules.length, 0);
+  const d = await f.incoming(f.event());
+  assert.equal(d.status, "pending"); assert.equal(d.text, "已收到，我稍后查看。");
+  assert.equal(f.models.length, 0); assert.equal(f.sends.length, 0);
+});
+test("changing confirm to automatic preserves old rule until explicit authorization", async (t) => {
+  const f = await fixture(t), s = f.assistant.store.get("settings");
+  s.fixedRules = [{ id: "keep", scope: "dm", target: "", text: "旧正文", keywords: [] }]; f.assistant.store.set("settings", s);
+  await f.act(await f.assistant.show("fixed-detail", { key: "confirm:keep" }), "fixed-edit");
+  await f.act(f.lastCard(), "fixed-start", { delivery: "auto" });
+  await f.act(f.lastCard(), "auto-next", { scope: "dm" });
+  assert.equal(f.lastCard().fields[0].defaultValue, "旧正文");
+  await f.act(f.lastCard(), "auto-next", { answer: "新正文" });
+  await f.act(f.lastCard(), "auto-next", { hours: "1" });
+  await f.act(f.lastCard(), "auto-next", { cooldown: "5" });
+  assert.equal(f.assistant.store.get("settings").fixedRules[0].text, "旧正文");
+  assert.equal(f.assistant.store.get("settings").autoRules.length, 0);
+  await f.act(f.lastCard(), "save-auto");
+  const saved = f.assistant.store.get("settings");
+  assert.equal(saved.fixedRules.length, 0); assert.equal(saved.autoRules[0].id, "keep");
+  assert.equal(saved.autoRules[0].text, "新正文");
+});
+test("overlapping legacy confirmation and automatic rules never silently auto-send", async (t) => {
+  const f = await fixture(t), s = f.assistant.store.get("settings");
+  f.prefs.reply.default = { mode: "fixed", text: "收到" };
+  s.autoRules = [{ id: "old", scope: "dm", target: "", text: "收到", keywords: [], expires: Date.now() + 3600000, cooldownMinutes: 30 }];
+  f.assistant.store.set("settings", s);
+  const d = await f.incoming(f.event());
+  assert.equal(d.status, "pending"); assert.match(d.error, /冲突/); assert.equal(f.sends.length, 0);
+});
+test("expired automatic rule can be renewed only after a new complete authorization", async (t) => {
+  const f = await fixture(t), s = f.assistant.store.get("settings");
+  s.autoRules = [{ id: "expired", scope: "dm", target: "", text: "旧正文", keywords: [], expires: Date.now() - 1, cooldownMinutes: 30 }];
+  f.assistant.store.set("settings", s);
+  await f.act(await f.assistant.show("fixed-detail", { key: "auto:expired" }), "fixed-edit");
+  await f.act(f.lastCard(), "fixed-start", { delivery: "auto" });
+  await f.act(f.lastCard(), "auto-next", { scope: "dm" });
+  await f.act(f.lastCard(), "auto-next", { answer: "续期正文" });
+  await f.act(f.lastCard(), "auto-next", { hours: "1" });
+  await f.act(f.lastCard(), "auto-next", { cooldown: "30" });
+  assert.ok(f.assistant.store.get("settings").autoRules[0].expires < Date.now());
+  const before = Date.now();
+  await f.act(f.lastCard(), "save-auto");
+  const renewed = f.assistant.store.get("settings").autoRules[0];
+  assert.equal(renewed.id, "expired"); assert.equal(renewed.text, "续期正文");
+  assert.ok(renewed.expires >= before + 3600000); assert.equal(f.sends.length, 0);
+});

@@ -89,7 +89,7 @@ test("preauthorized content sends without model and cooldown suppresses repeat c
   assert.equal(f.sends[0].text, "已收到。");
   assert.equal(f.models.length, 0);
 });
-test("expired or conflicting automatic answers fall back to drafts", async (t) => {
+test("conflicting fixed answers require manual input; expired authorizations fall back to AI", async (t) => {
   const f = await fixture(t),
     s = initialSettings();
   const rule = {
@@ -103,13 +103,16 @@ test("expired or conflicting automatic answers fall back to drafts", async (t) =
   };
   s.autoRules = [rule, { ...rule, id: "two", text: "B" }];
   f.assistant.store.set("settings", s);
-  await f.incoming(f.event());
+  const conflict = await f.incoming(f.event());
   assert.equal(f.sends.length, 0);
-  assert.equal(f.models.length, 1);
+  assert.equal(f.models.length, 0);
+  assert.equal(conflict.status, "inbox");
+  assert.match(conflict.error, /冲突/);
   s.autoRules = [{ ...rule, expires: Date.now() - 1 }];
   f.assistant.store.set("settings", s);
   await f.incoming(f.event());
   assert.equal(f.sends.length, 0);
+  assert.equal(f.models.length, 1);
 });
 test("uncertain send result is durable and never retried by repeated click", async (t) => {
   let calls = 0;

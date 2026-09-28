@@ -5,8 +5,9 @@ import { eligibleTopics, normalizeTopicDecision, topicDisposition, TOPIC_REASONS
 import { randomUUID } from "node:crypto";
 import { createCardTransport } from "./card-transport.mjs";
 import { createCardUpdateQueue } from "./card-update-queue.mjs";
+import { fixedReplyRows } from "./assistant-fixed-rules.mjs";
 import { cardFormFields } from "./assistant-card-protocol.mjs";
-import { resolveTargets, splitTargets, resolveDisplayLabels } from "./assistant-directory.mjs";
+import { resolveTargets, splitTargets, resolveDisplayLabels, targetInput } from "./assistant-directory.mjs";
 import { sendExact } from "./assistant-dws.mjs";
 import { draftReply, draftFailure } from "./assistant-model.mjs";
 import {
@@ -21,6 +22,7 @@ import {
   safeText,
   autoAnswer,
   matchingAutoRules,
+  ordinaryReplyDecision,
   quietNow,
 } from "./assistant-settings.mjs";
 import { AssistantStore, PENDING, EDITABLE, messageKey } from "./assistant-store.mjs";
@@ -30,6 +32,7 @@ import { matchesRules, replySnapshot } from "./rules.mjs";
 import { previewLiteral } from "./send-preview.mjs";
 
 const NAV = new Set([
+  "fixed-replies", "fixed-new", "fixed-detail",
   ...TOPIC_PAGES,
   "home",
   "listen",
@@ -153,11 +156,13 @@ export function createAssistant(api, config, dependencies = {}) {
   });
   function saveSettings(mutator) {
     const value = settings();
-    value.autoRules = value.autoRules.filter((r) => r.expires > now());
     value.pauses = Object.fromEntries(
       Object.entries(value.pauses).filter(([, until]) => until > now()),
     );
     mutator(value);
+    // Keep the old rule available to an explicit edit even if it expired while
+    // the owner was reviewing it. Only the final confirmation renews authority.
+    value.autoRules = value.autoRules.filter((r) => r.expires > now());
     value.revision++;
     store.set("settings", validateSettings(value));
     notifications.kick();
@@ -675,12 +680,13 @@ export function createAssistant(api, config, dependencies = {}) {
         }
       }
       if (!valid()) { if (current()) { review("changed"); notice(d); } return; }
-      const rule = autoAnswer(event, reply, settings(), now());
-      if (rule) {
+      const ordinary = ordinaryReplyDecision(event, reply, settings(), now());
+      const rule = ordinary.rule;
+      if (ordinary.kind === "auto") {
         const pending = store.put({ ...d, status: "pending", text: rule.text });
         await deliver({ id: d.id, version: pending.version }, undefined, rule);
-      } else if (reply.mode === "inbox") store.put({ ...d, status: "inbox" });
-      else if (reply.mode === "fixed") store.put({ ...d, status: "pending", text: reply.text });
+      } else if (ordinary.kind === "inbox") store.put({ ...d, status: "inbox", error: ordinary.error });
+      else if (ordinary.kind === "confirm") store.put({ ...d, status: "pending", text: ordinary.text, error: ordinary.error });
       else await generate({ id: d.id, version: d.version });
       notice(store.draft(d.id));
     })().catch(() => {
@@ -811,13 +817,31 @@ export function createAssistant(api, config, dependencies = {}) {
         }
       });
       return show("reply", {}, replace, "回复规则已保存。");
+    } else if (action.op === "fixed-start") {
+      if (card.name !== "fixed-new" || !["confirm", "auto"].includes(v.delivery)) throw new Error("请重新选择发送方式。");
+      return show("auto-new", { wizard: { ...card.args.wizard, delivery: v.delivery } }, replace);
+    } else if (["fixed-open", "fixed-edit", "fixed-remove"].includes(action.op)) {
+      const key = action.op === "fixed-open" ? v.rule : card.args.key;
+      const entry = fixedReplyRows(listener.snapshot(), settings()).find((r) => r.key === key);
+      if (!entry) throw new Error("规则已变化，请重新打开固定回复。");
+      if (action.op === "fixed-open") return show("fixed-detail", { key }, replace);
+      if (entry.source === "topic") return show("topic-detail", { id: entry.id }, replace);
+      if (entry.source === "preference") return show("reply-edit", { targetKind: entry.scope,
+        targets: entry.target ? [{ id: entry.target, name: directory().find((r) => r.id === entry.target)?.name || entry.target }] : [] }, replace);
+      if (action.op === "fixed-remove") {
+        saveSettings((s) => { const key = entry.source === "auto" ? "autoRules" : "fixedRules"; s[key] = s[key].filter((r) => r.id !== entry.id); });
+        return show("fixed-replies", {}, replace, "固定回复规则已撤销。");
+      }
+      return show("fixed-new", { wizard: { delivery: entry.delivery, scope: entry.scope,
+        targetInput: entry.target ? targetInput(entry.scope, [entry.target], directory()) : "", answer: entry.text,
+        originalTargets: entry.target ? [entry.target] : [], keywords: entry.keywords.join("，"), editId: entry.id, editSource: entry.source } }, replace);
     } else if (action.op === "auto-back") {
       return show(action.destination, { wizard: { ...card.args.wizard, ...v } }, replace);
     } else if (action.op === "auto-next") {
       const draft = { ...card.args.wizard, ...v };
       if (card.name === "auto-new") {
         draft.targets = ["user", "group"].includes(v.scope)
-          ? await targets(card, v.scope, v.targetInput)
+          ? await targets(card, v.scope, v.targetInput, draft.originalTargets || [])
           : [];
         if (["user", "group"].includes(v.scope) && !draft.targets.length)
           throw new Error("请填写指定对象。");
@@ -827,6 +851,7 @@ export function createAssistant(api, config, dependencies = {}) {
       if (card.name === "auto-content") {
         draft.answer = safeText(v.answer);
         splitTargets(v.keywords, 10);
+        if (draft.delivery === "confirm") return show("auto-review", { wizard: draft }, replace);
         return show("auto-limits", { wizard: draft }, replace);
       }
       if (card.name === "auto-limits") return show("auto-frequency", { wizard: draft }, replace);
@@ -838,26 +863,31 @@ export function createAssistant(api, config, dependencies = {}) {
       const draft = card.args.wizard;
       if (
         !draft ||
-        !["1", "8", "24", "168"].includes(draft.hours) ||
-        !["5", "30", "60", "1440"].includes(draft.cooldown)
+        (draft.delivery !== "confirm" && (!["1", "8", "24", "168"].includes(draft.hours) ||
+        !["5", "30", "60", "1440"].includes(draft.cooldown)))
       )
         throw new Error("授权摘要无效，请重新设置。");
       const rows = ["user", "group"].includes(draft.scope) ? draft.targets : [{ id: "" }];
       if (!rows?.length) throw new Error("请先校验指定对象。");
       assertLive(card);
       saveSettings((s) => {
-        for (const row of rows)
-          s.autoRules.push({
-            id: randomUUID(),
+        if (draft.editId) {
+          const key = draft.editSource === "auto" ? "autoRules" : "fixedRules";
+          if (!s[key].some((r) => r.id === draft.editId)) throw new Error("原规则已变化，请重新打开。");
+          s[key] = s[key].filter((r) => r.id !== draft.editId);
+        }
+        for (const [i, row] of rows.entries())
+          (draft.delivery === "confirm" ? s.fixedRules : s.autoRules).push({
+            id: i === 0 && draft.editId ? draft.editId : randomUUID(),
             scope: draft.scope,
             target: row.id,
             text: safeText(draft.answer),
             keywords: splitTargets(draft.keywords, 10),
-            expires: now() + Number(draft.hours) * 3600000,
-            cooldownMinutes: Number(draft.cooldown),
+            ...(draft.delivery === "confirm" ? {} : { expires: now() + Number(draft.hours) * 3600000,
+            cooldownMinutes: Number(draft.cooldown) }),
           });
       });
-      return show("automation", {}, replace, "已按上述范围、正文和期限授权。");
+      return show("fixed-replies", {}, replace, draft.delivery === "confirm" ? "固定回复已保存，每条仍需本人确认。" : "已按上述范围、正文和期限授权自动发送。");
     } else if (action.op === "revoke-auto") {
       saveSettings((s) => {
         s.autoRules = s.autoRules.filter((r) => !array(v.rules).includes(r.id));

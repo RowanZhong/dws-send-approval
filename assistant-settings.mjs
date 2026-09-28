@@ -5,6 +5,7 @@ export function initialSettings() {
     version: 1,
     revision: 0,
     autoRules: [],
+    fixedRules: [],
     topics: initialTopics(),
     pauses: {},
     notifications: {
@@ -65,6 +66,16 @@ export function validateSettings(value) {
   if (new Set(value.autoRules.map((r) => r.id)).size !== value.autoRules.length) {
     throw new Error("自动规则重复。");
   }
+  const fixedRules = value.fixedRules ?? [];
+  if (!Array.isArray(fixedRules) || fixedRules.length > 20 ||
+      new Set(fixedRules.map((r) => r.id)).size !== fixedRules.length) throw new Error("固定回复规则无效。");
+  for (const rule of fixedRules) {
+    if (!stableId(rule.id) || !["all", "dm", "group", "user"].includes(rule.scope) ||
+        (["group", "user"].includes(rule.scope) && !stableId(rule.target)) ||
+        !Array.isArray(rule.keywords) || rule.keywords.length > 10 ||
+        rule.keywords.some((k) => typeof k !== "string" || !k.trim() || k.length > 100)) throw new Error("固定回复范围或条件无效。");
+    safeText(rule.text);
+  }
   const n = value.notifications;
   if (
     !["immediate", "digest", "manual"].includes(n.mode) ||
@@ -93,7 +104,7 @@ export function validateSettings(value) {
   ) {
     throw new Error("暂停设置无效。");
   }
-  return { ...structuredClone(value), topics: validateTopics(value.topics) };
+  return { ...structuredClone(value), fixedRules: structuredClone(fixedRules), topics: validateTopics(value.topics) };
 }
 export function quietNow(settings, now) {
   const n = settings.notifications;
@@ -130,6 +141,25 @@ export function matchingAutoRules(event, reply, settings, now) {
 }
 export function autoAnswer(event, reply, settings, now) {
   const matches = matchingAutoRules(event, reply, settings, now);
+  if (reply.mode === "fixed" || matchingFixedRules(event, reply, settings, now).length) return null;
   // Overlapping, different answers need human review rather than an arbitrary winner.
   return matches.length && new Set(matches.map((r) => r.text)).size === 1 ? matches[0] : null;
+}
+export function matchingFixedRules(event, reply, settings, now) {
+  return matchingAutoRules(event, reply, { ...settings,
+    autoRules: (settings.fixedRules ?? []).map((r) => ({ ...r, expires: Number.MAX_SAFE_INTEGER })) }, now);
+}
+export function ordinaryReplyDecision(event, reply, settings, now) {
+  if (["off", "inbox"].includes(reply.mode)) return { kind: reply.mode };
+  const manual = matchingFixedRules(event, reply, settings, now);
+  if (reply.mode === "fixed") manual.push({ text: reply.text, source: "preferences" });
+  const automatic = matchingAutoRules(event, reply, settings, now);
+  const texts = new Set([...manual, ...automatic].map((r) => r.text));
+  if (texts.size > 1 || (manual.length && automatic.length)) {
+    return { kind: texts.size === 1 ? "confirm" : "inbox", text: texts.size === 1 ? [...texts][0] : "",
+      error: "固定回复规则的正文或发送方式存在冲突，本条请核对后手动确认。" };
+  }
+  if (manual.length) return { kind: "confirm", text: manual[0].text };
+  if (automatic.length) return { kind: "auto", rule: automatic[0] };
+  return { kind: "ai" };
 }
