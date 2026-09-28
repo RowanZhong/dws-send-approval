@@ -4,6 +4,7 @@ import { TOPIC_PAGES } from "./assistant-topic-views.mjs";
 import { eligibleTopics, normalizeTopicDecision, topicDisposition, TOPIC_REASONS } from "./assistant-topic-rules.mjs";
 import { randomUUID } from "node:crypto";
 import { createCardTransport } from "./card-transport.mjs";
+import { createCardUpdateQueue } from "./card-update-queue.mjs";
 import { cardFormFields } from "./assistant-card-protocol.mjs";
 import { resolveTargets, splitTargets, resolveDisplayLabels } from "./assistant-directory.mjs";
 import { sendExact } from "./assistant-dws.mjs";
@@ -68,12 +69,15 @@ export function createAssistant(api, config, dependencies = {}) {
   let listener,
     closed = true,
     timer,
+    cleanupTimer,
     signal,
     modelQueue = Promise.resolve(),
     sendQueue = Promise.resolve(),
     maintenanceBusy = false,
+    observedTransport,
     directoryRefresh;
   const jobs = new Set();
+  const cardUpdates = createCardUpdateQueue();
   const topicQueue = createTopicQueue({ complete: dependencies.classify ?? ((content, rules, signal) => classifyTopic(api, config, content, rules, signal)), now, ...dependencies.topicQueueOptions });
   const classify = async (content, rules, valid) => normalizeTopicDecision(
     await topicQueue.run(content, rules, signal?.signal, valid), rules);
@@ -168,7 +172,8 @@ export function createAssistant(api, config, dependencies = {}) {
   }
   function reconcileCardTransport() {
     const selected = managedTransport?.mode();
-    if (!selected) return;
+    if (!selected || selected === observedTransport) return;
+    observedTransport = selected;
     for (const card of store.listCards()) {
       if (!card.invalidated && (card.transport ?? "legacy") !== selected) {
         store.card({ ...card, invalidated: "卡片接口已切换，请重新发送 /dws", inactivePainted: true });
@@ -189,6 +194,17 @@ export function createAssistant(api, config, dependencies = {}) {
     }
   }
   async function paintInactive(card) {
+    return cardUpdates.run(card.outTrackId, async () => {
+    if (closed) return;
+    const current = store.cardForTrack(card.outTrackId);
+    if (!current || current.id !== card.id || current.inactivePainted ||
+        (!current.invalidated && current.expires > now() && current.protocol === 2) ||
+        (current.nextPaintAttemptAt ?? 0) > now()) return;
+    card = current;
+    const attempts = (card.paintAttempts ?? 0) + 1;
+    // Persist the retry reservation before I/O, including across a restart.
+    store.card({ ...card, invalidated: card.invalidated || "卡片已到期", paintAttempts: attempts,
+      nextPaintAttemptAt: now() + Math.min(900000, 30000 * 2 ** Math.min(attempts - 1, 5)) });
     await transport()?.updateCard({
       accountId: config.accountId,
       ownerUserId: config.ownerUserId,
@@ -210,35 +226,38 @@ export function createAssistant(api, config, dependencies = {}) {
       },
     });
     const latest = store.getCard(card.id);
-    if (latest?.invalidated) store.card({ ...latest, inactivePainted: true });
+    if (latest?.invalidated) store.card({ ...latest, inactivePainted: true, inactivePaintedAt: now() });
+    });
   }
   async function maintenance() {
     if (closed || maintenanceBusy) return;
     maintenanceBusy = true;
     try {
       reconcileCardTransport();
-      for (const card of store.listCards()) {
-        if (!card.invalidated && (card.protocol !== 2 || card.expires <= now())) {
+      for (const card of store.expiredCards(now())) {
+        if (!card.invalidated) {
           store.card({
             ...card,
             invalidated: card.protocol !== 2 ? "旧版卡片已停用" : "卡片已到期",
+            invalidatedAt: now(),
           });
         }
       }
-      for (const card of store
-        .listCards()
-        .filter((c) => c.invalidated && !c.inactivePainted)
-        .slice(0, 10)) {
+      for (const card of store.pendingCardPaints(now())) {
         try {
           await paintInactive(card);
         } catch {
           /* Retry display updates; authority is already revoked. */
         }
       }
-      store.prune(now());
     } finally {
       maintenanceBusy = false;
     }
+  }
+  function cleanup() {
+    if (closed) return;
+    store.prune(now());
+    notifications.kick();
   }
   async function targets(card, kind, raw, existing = []) {
     const rows = await resolve(kind, raw, existing);
@@ -289,6 +308,10 @@ export function createAssistant(api, config, dependencies = {}) {
     return closed ? [] : directory();
   }
   async function show(name = "home", args = {}, replace, notice = "", options = {}) {
+    return replace ? cardUpdates.run(replace, () => showCard(name, args, replace, notice, options))
+      : showCard(name, args, replace, notice, options);
+  }
+  async function showCard(name = "home", args = {}, replace, notice = "", options = {}) {
     if (closed) {
       throw new Error("代回复服务未就绪。");
     }
@@ -313,7 +336,6 @@ export function createAssistant(api, config, dependencies = {}) {
     ) {
       throw new Error("卡片已失效，请重新发送 /dws。");
     }
-    store.prune(now());
     const view = buildView(name, state(), args),
       id = randomUUID(),
       outTrackId = replace ?? `dws-assistant-${randomUUID()}`;
@@ -388,7 +410,8 @@ export function createAssistant(api, config, dependencies = {}) {
       await transport().sendCard(request);
     }
     card.deliveryState = "delivered";
-    if (store.cardForTrack(outTrackId)?.id === card.id) store.card(card);
+    const delivered = store.cardForTrack(outTrackId);
+    if (delivered?.id === card.id) store.card({ ...delivered, deliveryState: "delivered" });
     // Record only after successful delivery/update; failed sends remain retryable.
     rememberNotification(store, card, view.notificationRefs ?? view.refs, now());
     if (!replace) track(maintenance());
@@ -947,6 +970,7 @@ export function createAssistant(api, config, dependencies = {}) {
       await store.open(ctx.stateDir);
       try { managedTransport?.start(); } catch (error) { store.close(); throw error; }
       closed = false;
+      observedTransport = undefined;
       reconcileCardTransport();
       signal = new AbortController();
       if (!store.get("settings")) {
@@ -955,16 +979,21 @@ export function createAssistant(api, config, dependencies = {}) {
       settings();
       notifications.start();
       for (const draft of store.list(attentionStates)) notice(draft);
-      track(maintenance());
+      for (const card of store.listCards()) {
+        if (!card.invalidated && card.protocol !== 2) store.card({ ...card, invalidated: "旧版卡片已停用", invalidatedAt: now() });
+      }
+      track(maintenance().then(cleanup));
       timer = setInterval(() => {
         track(maintenance());
-        notifications.kick();
-      }, 30000);
+      }, config.assistant.cards.expiryCheckSeconds * 1000);
       timer.unref?.();
+      cleanupTimer = setInterval(cleanup, 30000);
+      cleanupTimer.unref?.();
     },
     async stop() {
       closed = true;
       clearInterval(timer);
+      clearInterval(cleanupTimer);
       notifications.stop();
       signal?.abort();
       managedTransport?.stop();

@@ -27,7 +27,11 @@ export class AssistantStore {
         conversation TEXT NOT NULL, status TEXT NOT NULL, version INTEGER NOT NULL, updated INTEGER NOT NULL, body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS draft_conversation ON drafts(conversation,updated);
       CREATE INDEX IF NOT EXISTS draft_status ON drafts(status,updated);
-      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, expires INTEGER NOT NULL, body TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, expires INTEGER NOT NULL, body TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS card_expiry ON cards(json_extract(body,'$.invalidated'),expires);
+      CREATE INDEX IF NOT EXISTS card_paint ON cards(
+        coalesce(json_extract(body,'$.inactivePainted'),0),
+        coalesce(json_extract(body,'$.nextPaintAttemptAt'),0),expires);`);
     const identity = {
       profile: this.config.profile,
       owner: this.config.ownerUserId,
@@ -50,7 +54,7 @@ export class AssistantStore {
             : row.status === "classifying" ? "主题识别被中断，未自动重试；可修改或重新拟稿。" : "拟稿被中断，可重新拟稿。",
       });
     }
-    this.prune();
+    // The assistant first registers expiry paints, then runs physical cleanup.
   }
   get(key) {
     const r = this.db.prepare("SELECT body FROM kv WHERE key=?").get(key);
@@ -154,6 +158,19 @@ export class AssistantStore {
       .all()
       .map((r) => JSON.parse(r.body));
   }
+  expiredCards(now, limit = 100) {
+    return this.db.prepare(`SELECT body FROM cards
+      WHERE json_extract(body,'$.invalidated') IS NULL AND expires<=?
+      ORDER BY expires,id LIMIT ?`).all(now, limit).map((r) => JSON.parse(r.body));
+  }
+  pendingCardPaints(now, limit = 10) {
+    return this.db.prepare(`SELECT body FROM cards
+      WHERE coalesce(json_extract(body,'$.inactivePainted'),0)=0
+        AND coalesce(json_extract(body,'$.nextPaintAttemptAt'),0)<=?
+        AND json_extract(body,'$.invalidated') IS NOT NULL
+      ORDER BY coalesce(json_extract(body,'$.nextPaintAttemptAt'),0),expires,id LIMIT ?`)
+      .all(now, limit).map((r) => JSON.parse(r.body));
+  }
   cardForTrack(outTrackId) {
     return this.listCards().find((c) => c.outTrackId === outTrackId);
   }
@@ -172,12 +189,12 @@ export class AssistantStore {
     this.db
       .prepare("DELETE FROM kv WHERE key LIKE 'cooldown:%' AND CAST(body AS INTEGER)<?")
       .run(now - 86400000);
-    this.db.prepare("DELETE FROM cards WHERE expires<?").run(now - 7 * 86400000);
+    this.db.prepare("DELETE FROM cards WHERE expires<? AND json_extract(body,'$.inactivePainted')=1").run(now - 7 * 86400000);
     this.db
       .prepare(
-        "DELETE FROM cards WHERE id NOT IN (SELECT id FROM cards ORDER BY expires DESC LIMIT 1000)",
+        "DELETE FROM cards WHERE expires<? AND json_extract(body,'$.inactivePainted')=1 AND id NOT IN (SELECT id FROM cards ORDER BY expires DESC LIMIT 1000)",
       )
-      .run();
+      .run(now);
     for (const draft of this.list([...PENDING])) {
       if (draft.expires <= now) {
         this.put({ ...draft, status: "expired", version: draft.version + 1 });

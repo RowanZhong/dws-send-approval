@@ -8,7 +8,11 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["ownerUserId", "dwsPath", "listener"],
+    "required": [
+      "ownerUserId",
+      "dwsPath",
+      "listener"
+    ],
     "properties": {
       "agentId": {
         "type": "string",
@@ -44,7 +48,14 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": ["all-direct", "all-group", "at-me", "sender", "group", "all-direct-and-at-me"]
+            "enum": [
+              "all-direct",
+              "all-group",
+              "at-me",
+              "sender",
+              "group",
+              "all-direct-and-at-me"
+            ]
           },
           "target": {
             "type": "string",
@@ -68,7 +79,10 @@
       },
       "mode": {
         "type": "string",
-        "enum": ["approval", "block"],
+        "enum": [
+          "approval",
+          "block"
+        ],
         "default": "approval"
       },
       "assistant": {
@@ -94,6 +108,19 @@
             "maximum": 1440,
             "default": 30,
             "description": "Card interaction lifetime in minutes; navigation does not extend it."
+          },
+          "cards": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expiryCheckSeconds": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 60,
+                "default": 10,
+                "description": "Lightweight card expiry checks; independent of card lifetime and storage cleanup."
+              }
+            }
           }
         }
       }
