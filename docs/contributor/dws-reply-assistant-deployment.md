@@ -1,6 +1,6 @@
 # 钉钉个人代回复助手 · 技术方案与安装配置
 
-**开发及运维指南 · 2026-09-29 · 公司授权应用迁移双宿主隔离验收通过**
+**开发及运维指南 · 插件 0.9.0 · 2026-09-29 · 公司授权应用迁移双宿主隔离验收通过**
 
 面向开发人员和平台管理员。员工操作另见[员工使用手册](../user/dws-reply-assistant-manual.html)。适用一名员工一个 Pod、独立 OpenClaw 实例；兼容验证覆盖 OpenClaw 2026.7.1-2 与 2026.8.1。
 
@@ -103,6 +103,8 @@ settings 仍为 version 1，新增可选 `topics:{enabled,mode,revision,rules}`�
 
 从 0.8.0 起，助手在独立项目 `dws-send-approval` 中维护，同一个安装包适配两版宿主。不再向两个社区插件仓库复制业务源码。
 
+当前安装包为 **0.9.0**。本次新增公司统一 DWS 授权应用策略、存量绑定迁移及中断恢复，配置见[公司统一授权应用切换](#company-app-migration)。升级包本身不会启用该策略，管理员需显式下发 `identityPolicy`；未配置时沿用原身份校验。公司应用迁移会暂停原自动授权、将旧未完成草稿保留为只读，员工需在迁移完成后重新授权自动回复。插件 ID、状态目录和原配置保持兼容，工具起草仍默认关闭。
+
 | 宿主 | 社区钉钉插件来源 | 助手接入方式 |
 | --- | --- | --- |
 | OpenClaw 2026.8.1 | 原作者 `soimy/openclaw-channel-dingtalk`；通用接口未正式提供前，使用锁定基线加最小补丁 | `@soimy/dingtalk/card-extensions` 通用卡片接口 |
@@ -137,7 +139,7 @@ npm ci
 npm test
 npm run pack:local
 npm run pack:check
-openclaw plugins install ./artifacts/dws-send-approval-0.8.0.tgz
+openclaw plugins install ./artifacts/dws-send-approval-0.9.0.tgz
 ```
 
 已有同名插件时按当前 OpenClaw 的本地插件更新流程替换代码。开发调试也可把 `plugins.load.paths` 中的旧 `examples/dws-send-approval` 路径替换为本独立目录；不要同时加载两份 `dws-send-approval`。插件条目仍叫 `dws-send-approval`，监听默认值仍为 `listener.enabled:false`。
@@ -485,6 +487,8 @@ profile 单次最多 5 秒，本人/机器人查询单次最多 10 秒；手动�
 
 DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可能缺少 profile 的 clientId。此时会提示“DWS 登录有效，但账号信息仍缺少授权应用 ID”，请管理员在 **Gateway 的同一运行用户、配置目录和密钥环境** 对当前账号重新授权，然后刷新。无需先退出所有账号。插件不会登录、登出、切换账号、读取令牌文件或猜测缺失 ID；旧缓存也不能充当当前身份的证明。如果认证检查报告密钥或钥匙串问题，应先保留凭据并修复运行环境。恢复后若授权应用发生变化，仍按原绑定迁移流程处理，不能直接覆盖 identity.json。
 
+<a id="company-app-migration"></a>
+
 ### 公司统一 DWS 授权应用：集中下发、每实例自动迁移
 
 适用于 OpenClaw **2026.7.1-2、2026.8.1**，两版的助手配置完全相同。公司从员工各自的旧 DWS 应用切换到统一应用时，在原有 `plugins.entries["dws-send-approval"].config` 中增加以下字段，保留其余配置：
@@ -644,9 +648,9 @@ OpenClaw 状态目录和 DWS 配置目录挂载员工独立的持久卷。不要
 
 接口可用时，临时断线或请求错误不会触发跨接口重试。切换接口导致旧操作卡停用，业务状态保留。接口升级应连同宿主版本、补丁校验值与卡片真机回归一起验收。
 
-### 当前 main 的配置与验收范围
+### 0.9.0 的配置与验收范围
 
-本轮功能与身份修复已通过两版必要真机验收，并已推送 GitHub main，代码基线为 `6662d54`。专用 Agent 的两版完整配置、路由、启用验证和排错见[第 3 节](#draft-agent-setup)；参数、模板迁移及接口限制见[只读起草能力与限制](read-only-drafting.md)。完整证据与未覆盖范围见 [2026-09-28 执行记录](../plans/2026-09-28-development-record.md)及[身份修复记录](../plans/2026-09-28-identity-recovery.md)。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。当前包版本仍为 `0.8.0`，本次没有另发新版本标签，部署应记录实际 Git 提交并从对应源码打包。
+0.9.0 包含此前功能与身份修复（代码基线 `6662d54`）及公司统一授权应用迁移（代码基线 `db9ab97`），两轮均已完成各自的双版必要真机验收。专用 Agent 的两版完整配置、路由、启用验证和排错见[第 3 节](#draft-agent-setup)；参数、模板迁移及接口限制见[只读起草能力与限制](read-only-drafting.md)。完整证据与未覆盖范围见 [2026-09-28 执行记录](../plans/2026-09-28-development-record.md)、[身份修复记录](../plans/2026-09-28-identity-recovery.md)及[公司授权迁移记录](../plans/2026-09-29-company-app-migration.md)。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。部署应记录 `0.9.0` 和实际 Git 提交，并从对应源码打包；版本号不能代替提交标识或企业灰度验收。
 
 ## 7. 验证、性能与交付状态
 

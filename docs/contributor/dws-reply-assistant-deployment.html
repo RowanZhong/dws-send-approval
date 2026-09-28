@@ -40,7 +40,7 @@
 /* Uses the same content model as the new DingTalk card; external text is literal. */
 .description{white-space:normal}.preview-status{display:inline-block;font-weight:650;color:#12684f;background:#edf8f2;border-radius:6px;padding:4px 10px;margin-bottom:12px}.preview-summary{margin:0 0 16px;padding:0;list-style:none;color:#627082}.preview-summary li{margin:3px 0;font-size:12px}.preview-section{border-top:1px solid #e4eaf0;padding:14px 0 3px;scroll-margin:0}.preview-section h4{font-size:13px;color:#243d52;margin:0 0 8px!important;line-height:1.6}.preview-section p{margin:0 0 12px;white-space:pre-wrap;line-height:1.85;overflow-wrap:anywhere}.preview-notice{margin:12px 0 0;padding:10px 12px;border-left:3px solid #d49b35;border-radius:0 6px 6px 0;background:#fff7e8;color:#74591e;white-space:pre-wrap;font-size:12px}.actions button.primary{background:#176bdd;color:#fff}.actions{gap:6px}.actions button{font-size:13px;font-weight:500}.demo #page-picker{margin:8px 0 12px}.preview-status+.preview-section{margin-top:4px}
 </style></head><body data-guide="developer"><header><div class="edition">FIELD GUIDE / 2026.09 · 使用与部署指南</div><div class="eyebrow">DINGTALK · PERSONAL REPLY ASSISTANT</div><h1>钉钉个人代回复助手<br>技术方案与安装配置</h1><p>面向开发人员与平台管理员：架构、部署、身份绑定、模板发布、验证与运维。</p><div class="badges"><span>main · 双版必要真机验收完成</span><span>OpenClaw 2026.7.1-2 / 2026.8.1</span><span>默认关闭监听</span><span>开发与运维</span></div><div class="journey"><div><b>01 · 理清边界</b><small>架构与可信身份</small></div><div><b>02 · 统一部署</b><small>配置模板与员工隔离</small></div><div><b>03 · 可复核交付</b><small>测试、性能与运维</small></div></div></header><div class="layout"><aside><strong>CONTENTS · 阅读导航</strong><a href="#sec-1">1. 整体方案与定向控制原理 </a><a href="#sec-2">2. 技术架构与边界 </a><a href="#sec-3">3. 管理员安装、升级和卡片模板 </a><a href="#sec-4">4. 配置项从哪里来 </a><a href="#sec-5">5. 15000 个 Pod 的统一部署 </a><a href="#sec-6">6. 独立维护边界 </a><a href="#sec-7">7. 验证、性能与交付状态 </a><a href="#sec-8">8. 卡片协议、组件与发布验收 </a><a href="#sec-9">9. 开发、打包与交付 </a></aside><main><nav class="doc-switch"><a href="../user/dws-reply-assistant-manual.html">员工使用手册 ↗</a><a href="#sec-1">从第一节开始 ↓</a></nav><article>
-<p><strong>开发及运维指南 · 2026-09-29 · 公司授权应用迁移双宿主隔离验收通过</strong></p>
+<p><strong>开发及运维指南 · 插件 0.9.0 · 2026-09-29 · 公司授权应用迁移双宿主隔离验收通过</strong></p>
 <p>面向开发人员和平台管理员。员工操作另见<a href="./../user/dws-reply-assistant-manual.html">员工使用手册</a>。适用一名员工一个 Pod、独立 OpenClaw 实例；兼容验证覆盖 OpenClaw 2026.7.1-2 与 2026.8.1。</p>
 <section class="doc-section" id="sec-1"><h2 id="_1-整体方案与定向控制原理" tabindex="-1">1. 整体方案与定向控制原理 <a class="header-anchor" href="#_1-整体方案与定向控制原理" aria-label="Permalink to &quot;1. 整体方案与定向控制原理&quot;">&ZeroWidthSpace;</a></h2>
 <p>这套方案为每名员工的独立 OpenClaw 实例增加一条<strong>受控的个人消息处理流程</strong> ：DWS 用员工已登录的身份接收消息，自定义插件按员工设置筛选来源、识别消息主题、生成草稿并管理授权，社区钉钉插件负责投递卡片和接收本人操作。员工可以确认后发送，也可以提前授权有范围、有期限的固定答复。平台统一部署代码和配置模板，员工自己的身份、监听偏好与状态保留在各自 Pod 的持久化目录中。</p>
@@ -148,6 +148,7 @@
 </section><section class="doc-section" id="sec-3"><h2 id="_3-管理员安装、升级和卡片模板" tabindex="-1">3. 管理员安装、升级和卡片模板 <a class="header-anchor" href="#_3-管理员安装、升级和卡片模板" aria-label="Permalink to &quot;3. 管理员安装、升级和卡片模板&quot;">&ZeroWidthSpace;</a></h2>
 <h3 id="独立项目与版本组合" tabindex="-1">独立项目与版本组合 <a class="header-anchor" href="#独立项目与版本组合" aria-label="Permalink to &quot;独立项目与版本组合&quot;">&ZeroWidthSpace;</a></h3>
 <p>从 0.8.0 起，助手在独立项目 <code>dws-send-approval</code> 中维护，同一个安装包适配两版宿主。不再向两个社区插件仓库复制业务源码。</p>
+<p>当前安装包为 <strong>0.9.0</strong>。本次新增公司统一 DWS 授权应用策略、存量绑定迁移及中断恢复，配置见<a href="#company-app-migration">公司统一授权应用切换</a>。升级包本身不会启用该策略，管理员需显式下发 <code>identityPolicy</code>；未配置时沿用原身份校验。公司应用迁移会暂停原自动授权、将旧未完成草稿保留为只读，员工需在迁移完成后重新授权自动回复。插件 ID、状态目录和原配置保持兼容，工具起草仍默认关闭。</p>
 <div class="table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0"><table>
 <thead>
 <tr>
@@ -188,7 +189,7 @@ npm pack --ignore-scripts
 npm test
 npm run pack:local
 npm run pack:check
-openclaw plugins install ./artifacts/dws-send-approval-0.8.0.tgz
+openclaw plugins install ./artifacts/dws-send-approval-0.9.0.tgz
 </code></pre></figure>
 <p>已有同名插件时按当前 OpenClaw 的本地插件更新流程替换代码。开发调试也可把 <code>plugins.load.paths</code> 中的旧 <code>examples/dws-send-approval</code> 路径替换为本独立目录；不要同时加载两份 <code>dws-send-approval</code>。插件条目仍叫 <code>dws-send-approval</code>，监听默认值仍为 <code>listener.enabled:false</code>。</p>
 <p>首次部署先配置员工身份和卡片模板，暂关闭插件条目；安装完成后启用条目。已有员工的是否开启、范围、回复规则和主题授权从原状态恢复，部署不会代替员工更改选择。</p>
@@ -608,6 +609,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <p>“DWS 已登录”与“助手已验证完整绑定”是两项检查。DWS profile 元数据缺少组织 ID（corpId）、用户 ID（userId）或授权应用 ID（clientId）时，助手会明确列出缺失或格式异常的字段，保留个人数据并停止初始化。DWS 授权应用 ID 与社区机器人的 clientId 含义不同，不能互相替代。</p>
 <p>只有本人手动 <code>/dws identity refresh</code>，且当前账号唯一、组织和用户有效、与实例主人及显式 profile 配置一致、仅缺少 clientId 时，才执行一次 <code>dws auth status --profile CORP_ID:USER_ID --format json</code>。插件校验返回的组织、用户和有效凭据，再读取一次 profile。字段恢复完整后仍需通过原身份缓存的全部绑定校验，才能继续初始化。未配置公司授权策略时，正常启动、普通 <code>/dws</code> 重试、健康账号刷新均不增加认证检查，也没有后台轮询或自动反复尝试。</p>
 <p>DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可能缺少 profile 的 clientId。此时会提示“DWS 登录有效，但账号信息仍缺少授权应用 ID”，请管理员在 <strong>Gateway 的同一运行用户、配置目录和密钥环境</strong> 对当前账号重新授权，然后刷新。无需先退出所有账号。插件不会登录、登出、切换账号、读取令牌文件或猜测缺失 ID；旧缓存也不能充当当前身份的证明。如果认证检查报告密钥或钥匙串问题，应先保留凭据并修复运行环境。恢复后若授权应用发生变化，仍按原绑定迁移流程处理，不能直接覆盖 identity.json。</p>
+<p><a id="company-app-migration"></a></p>
 <h3 id="公司统一-dws-授权应用-集中下发、每实例自动迁移" tabindex="-1">公司统一 DWS 授权应用：集中下发、每实例自动迁移 <a class="header-anchor" href="#公司统一-dws-授权应用-集中下发、每实例自动迁移" aria-label="Permalink to &quot;公司统一 DWS 授权应用：集中下发、每实例自动迁移&quot;">&ZeroWidthSpace;</a></h3>
 <p>适用于 OpenClaw <strong>2026.7.1-2、2026.8.1</strong>，两版的助手配置完全相同。公司从员工各自的旧 DWS 应用切换到统一应用时，在原有 <code>plugins.entries[&quot;dws-send-approval&quot;].config</code> 中增加以下字段，保留其余配置：</p>
 <figure class="code-block"><figcaption>JSON 配置</figcaption><pre tabindex="0" aria-label="JSON 配置"><code>{
@@ -802,8 +804,8 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <p>助手只依赖卡片投递、更新和可信 Stream 回调，不依赖大文件上传上限、问卷人数或问卷超时增强。新版只跟随原作者代码与通用卡片接口，不继续维护这些无关改动；旧版兼容分支保留已有历史提交。</p>
 <p>助手项目不包含完整的 Channel，也不直接持有社区机器人的密钥或另建 Stream 连接。通用客户端在 <code>vendor/</code> 中保存固定版本与 MIT 声明，通过进程内注册表调用已经加载的 Channel；旧桥接仅为兼容已有部署。</p>
 <p>接口可用时，临时断线或请求错误不会触发跨接口重试。切换接口导致旧操作卡停用，业务状态保留。接口升级应连同宿主版本、补丁校验值与卡片真机回归一起验收。</p>
-<h3 id="当前-main-的配置与验收范围" tabindex="-1">当前 main 的配置与验收范围 <a class="header-anchor" href="#当前-main-的配置与验收范围" aria-label="Permalink to &quot;当前 main 的配置与验收范围&quot;">&ZeroWidthSpace;</a></h3>
-<p>本轮功能与身份修复已通过两版必要真机验收，并已推送 GitHub main，代码基线为 <code>6662d54</code>。专用 Agent 的两版完整配置、路由、启用验证和排错见<a href="#draft-agent-setup">第 3 节</a>；参数、模板迁移及接口限制见<a href="read-only-drafting.md">只读起草能力与限制</a>。完整证据与未覆盖范围见 <a href="../plans/2026-09-28-development-record.md">2026-09-28 执行记录</a>及<a href="../plans/2026-09-28-identity-recovery.md">身份修复记录</a>。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。当前包版本仍为 <code>0.8.0</code>，本次没有另发新版本标签，部署应记录实际 Git 提交并从对应源码打包。</p>
+<h3 id="_0-9-0-的配置与验收范围" tabindex="-1">0.9.0 的配置与验收范围 <a class="header-anchor" href="#_0-9-0-的配置与验收范围" aria-label="Permalink to &quot;0.9.0 的配置与验收范围&quot;">&ZeroWidthSpace;</a></h3>
+<p>0.9.0 包含此前功能与身份修复（代码基线 <code>6662d54</code>）及公司统一授权应用迁移（代码基线 <code>db9ab97</code>），两轮均已完成各自的双版必要真机验收。专用 Agent 的两版完整配置、路由、启用验证和排错见<a href="#draft-agent-setup">第 3 节</a>；参数、模板迁移及接口限制见<a href="read-only-drafting.md">只读起草能力与限制</a>。完整证据与未覆盖范围见 <a href="../plans/2026-09-28-development-record.md">2026-09-28 执行记录</a>、<a href="../plans/2026-09-28-identity-recovery.md">身份修复记录</a>及<a href="../plans/2026-09-29-company-app-migration.md">公司授权迁移记录</a>。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。部署应记录 <code>0.9.0</code> 和实际 Git 提交，并从对应源码打包；版本号不能代替提交标识或企业灰度验收。</p>
 </section><section class="doc-section" id="sec-7"><h2 id="_7-验证、性能与交付状态" tabindex="-1">7. 验证、性能与交付状态 <a class="header-anchor" href="#_7-验证、性能与交付状态" aria-label="Permalink to &quot;7. 验证、性能与交付状态&quot;">&ZeroWidthSpace;</a></h2>
 <h3 id="公司统一授权应用迁移-2026-09-29" tabindex="-1">公司统一授权应用迁移（2026-09-29） <a class="header-anchor" href="#公司统一授权应用迁移-2026-09-29" aria-label="Permalink to &quot;公司统一授权应用迁移（2026-09-29）&quot;">&ZeroWidthSpace;</a></h3>
 <p>全量 414 项测试及两版实际 SDK 矩阵通过；两版钉钉桌面真实 <code>/dws</code> 提示、迁移、新卡回调及旧草稿只读均已验证。旧应用绑定为合成数据，目标使用本机既有真实授权；不代表已核实公司新应用权限或 15000 Pod 压力。范围、限制与中断测试见<a href="../plans/2026-09-29-company-app-migration.md">执行记录</a>。</p>
