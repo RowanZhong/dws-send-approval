@@ -28,6 +28,9 @@ export class AssistantStore {
       CREATE INDEX IF NOT EXISTS draft_conversation ON drafts(conversation,updated);
       CREATE INDEX IF NOT EXISTS draft_status ON drafts(status,updated);
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, expires INTEGER NOT NULL, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS card_heads (track TEXT PRIMARY KEY, card_id TEXT NOT NULL);
+      INSERT OR IGNORE INTO card_heads(track,card_id)
+        SELECT json_extract(body,'$.outTrackId'),id FROM cards ORDER BY rowid DESC;
       CREATE INDEX IF NOT EXISTS card_expiry ON cards(json_extract(body,'$.invalidated'),expires);
       CREATE INDEX IF NOT EXISTS card_paint ON cards(
         coalesce(json_extract(body,'$.inactivePainted'),0),
@@ -43,6 +46,10 @@ export class AssistantStore {
       throw new Error("代回复数据与当前账号不匹配，已停止。");
     }
     this.set("identity", identity);
+    for (const { body } of this.db.prepare("SELECT body FROM cards WHERE json_extract(body,'$.operationState')='running'").all()) {
+      const card = JSON.parse(body);
+      if (card.operationState === "running") this.card({ ...card, operationState: "interrupted" });
+    }
     for (const row of this.list(["sending", "generating", "classifying"], 10000)) {
       this.put({
         ...row,
@@ -142,37 +149,47 @@ export class AssistantStore {
     return structuredClone(value);
   }
   card(value) {
-    this.db
-      .prepare("DELETE FROM cards WHERE json_extract(body,'$.outTrackId')=? AND id<>?")
-      .run(value.outTrackId, value.id);
+    const isNew = !this.getCard(value.id);
     this.db
       .prepare(
         "INSERT INTO cards VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET expires=excluded.expires,body=excluded.body",
       )
       .run(value.id, value.expires, JSON.stringify(value));
+    if (isNew) this.db.prepare(`INSERT INTO card_heads VALUES(?,?)
+      ON CONFLICT(track) DO UPDATE SET card_id=excluded.card_id`).run(value.outTrackId, value.id);
     return value;
   }
   listCards() {
     return this.db
-      .prepare("SELECT body FROM cards ORDER BY expires DESC")
+      .prepare("SELECT c.body FROM cards c JOIN card_heads h ON h.card_id=c.id ORDER BY c.expires DESC")
       .all()
       .map((r) => JSON.parse(r.body));
   }
   expiredCards(now, limit = 100) {
     return this.db.prepare(`SELECT body FROM cards
-      WHERE json_extract(body,'$.invalidated') IS NULL AND expires<=?
+      WHERE id IN (SELECT card_id FROM card_heads) AND json_extract(body,'$.invalidated') IS NULL AND expires<=?
       ORDER BY expires,id LIMIT ?`).all(now, limit).map((r) => JSON.parse(r.body));
   }
   pendingCardPaints(now, limit = 10) {
     return this.db.prepare(`SELECT body FROM cards
-      WHERE coalesce(json_extract(body,'$.inactivePainted'),0)=0
+      WHERE id IN (SELECT card_id FROM card_heads) AND coalesce(json_extract(body,'$.inactivePainted'),0)=0
         AND coalesce(json_extract(body,'$.nextPaintAttemptAt'),0)<=?
         AND json_extract(body,'$.invalidated') IS NOT NULL
       ORDER BY coalesce(json_extract(body,'$.nextPaintAttemptAt'),0),expires,id LIMIT ?`)
       .all(now, limit).map((r) => JSON.parse(r.body));
   }
+  pendingCardDeliveries(now, limit = 5) {
+    return this.db.prepare(`SELECT c.body FROM cards c JOIN card_heads h ON h.card_id=c.id
+      WHERE c.expires>? AND json_extract(c.body,'$.invalidated') IS NULL
+        AND json_extract(c.body,'$.deliveryState')='pending'
+        AND json_extract(c.body,'$.retryUpdate')=1
+        AND coalesce(json_extract(c.body,'$.nextDeliveryAttemptAt'),0)<=?
+      ORDER BY coalesce(json_extract(c.body,'$.nextDeliveryAttemptAt'),0),c.expires LIMIT ?`)
+      .all(now, now, limit).map((r) => JSON.parse(r.body));
+  }
   cardForTrack(outTrackId) {
-    return this.listCards().find((c) => c.outTrackId === outTrackId);
+    const row = this.db.prepare("SELECT c.body FROM cards c JOIN card_heads h ON h.card_id=c.id WHERE h.track=?").get(outTrackId);
+    return row ? JSON.parse(row.body) : undefined;
   }
   getCard(id) {
     const r = this.db.prepare("SELECT body FROM cards WHERE id=?").get(id);
@@ -180,7 +197,7 @@ export class AssistantStore {
   }
   cardsForDraft(id) {
     return this.db
-      .prepare("SELECT body FROM cards WHERE expires>?")
+      .prepare("SELECT c.body FROM cards c JOIN card_heads h ON h.card_id=c.id WHERE c.expires>?")
       .all(Date.now())
       .map((r) => JSON.parse(r.body))
       .filter((c) => c.refs?.some((r) => r.id === id));

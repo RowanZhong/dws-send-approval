@@ -78,6 +78,7 @@ export function createAssistant(api, config, dependencies = {}) {
     directoryRefresh;
   const jobs = new Set();
   const cardUpdates = createCardUpdateQueue();
+  const cardRecoveries = new Map();
   const topicQueue = createTopicQueue({ complete: dependencies.classify ?? ((content, rules, signal) => classifyTopic(api, config, content, rules, signal)), now, ...dependencies.topicQueueOptions });
   const classify = async (content, rules, valid) => normalizeTopicDecision(
     await topicQueue.run(content, rules, signal?.signal, valid), rules);
@@ -182,7 +183,8 @@ export function createAssistant(api, config, dependencies = {}) {
   }
   const liveCard = (card) => {
     const current = store.getCard(card.id);
-    return current && !current.invalidated && current.expires > now() && current.protocol === 2;
+    return current && store.cardForTrack(current.outTrackId)?.id === current.id &&
+      !current.invalidated && current.expires > now() && current.protocol === 2;
   };
   function assertLive(card) {
     if (!liveCard(card)) throw new Error("卡片已过期或被新卡替代，请重新发送 /dws。");
@@ -250,6 +252,9 @@ export function createAssistant(api, config, dependencies = {}) {
           /* Retry display updates; authority is already revoked. */
         }
       }
+      for (const card of store.pendingCardDeliveries(now())) {
+        try { await recoverDelivery(card); } catch { /* Same-card update only; never replay a send. */ }
+      }
     } finally {
       maintenanceBusy = false;
     }
@@ -258,6 +263,26 @@ export function createAssistant(api, config, dependencies = {}) {
     if (closed) return;
     store.prune(now());
     notifications.kick();
+  }
+  function recoverDelivery(card) {
+    return cardUpdates.run(card.outTrackId, async () => {
+      if (closed) return;
+      const current = store.cardForTrack(card.outTrackId);
+      if (current?.id !== card.id || current.invalidated || current.expires <= now() ||
+          current.deliveryState !== "pending" || !current.retryUpdate || !current.renderedData ||
+          (current.nextDeliveryAttemptAt ?? 0) > now()) return;
+      const attempts = (current.deliveryAttempts ?? 0) + 1;
+      store.card({ ...current, deliveryAttempts: attempts,
+        nextDeliveryAttemptAt: now() + Math.min(900000, 30000 * 2 ** Math.min(attempts - 1, 5)) });
+      await transport().updateCard({ accountId: config.accountId, ownerUserId: config.ownerUserId,
+        templateId: config.assistant.cardTemplateId, outTrackId: current.outTrackId,
+        transport: current.transport, data: current.renderedData });
+      const latest = store.getCard(current.id);
+      if (latest && store.cardForTrack(current.outTrackId)?.id === current.id) {
+        store.card({ ...latest, deliveryState: "delivered", retryUpdate: false });
+        rememberNotification(store, latest, latest.notificationRefs ?? latest.refs, now());
+      }
+    });
   }
   async function targets(card, kind, raw, existing = []) {
     const rows = await resolve(kind, raw, existing);
@@ -404,10 +429,16 @@ export function createAssistant(api, config, dependencies = {}) {
       transport: card.transport,
       data,
     };
-    if (replace) {
-      await transport().updateCard(request);
-    } else {
-      await transport().sendCard(request);
+    store.card({ ...card, renderedData: data, notificationRefs: view.notificationRefs ?? view.refs });
+    try {
+      if (replace) await transport().updateCard(request);
+      else await transport().sendCard(request);
+    } catch (error) {
+      const failed = store.getCard(card.id);
+      if (failed) store.card({ ...failed, retryUpdate: Boolean(replace),
+        deliveryAttempts: 1, nextDeliveryAttemptAt: now() + 30000 });
+      if (!replace) throw error;
+      throw Object.assign(new Error("卡片暂时无法更新。"), { code: "DWS_CARD_UPDATE_FAILED", cause: error });
     }
     card.deliveryState = "delivered";
     const delivered = store.cardForTrack(outTrackId);
@@ -905,8 +936,7 @@ export function createAssistant(api, config, dependencies = {}) {
       card.outTrackId !== input.outTrackId ||
       card.invalidated ||
       card.protocol !== 2 ||
-      card.expires <= now() ||
-      card.consumed
+      card.expires <= now()
     ) {
       if (
         card &&
@@ -921,11 +951,31 @@ export function createAssistant(api, config, dependencies = {}) {
       }
       return true;
     }
+    const head = store.cardForTrack(card.outTrackId);
+    if (card.consumed || head?.id !== card.id) {
+      if (!head || head.operationState === "running" || card.operationState === "running") return true;
+      if (head.invalidated || head.expires <= now()) {
+        track(paintInactive(head).catch(() => {}));
+        return true;
+      }
+      // An old button can recover the current page, never replay its mutation.
+      if (!cardRecoveries.has(card.outTrackId)) {
+        const alreadySent = head.refs?.length && head.refs.every((ref) => store.draft(ref.id)?.status === "sent");
+        const recovery = show(head.name, head.args, head.outTrackId,
+          alreadySent ? "回复已发送，本次点击未重复发送。" :
+            "页面已更新，本次点击未执行操作。请核对当前内容后重新确认。").catch(() => {
+          api.logger?.warn?.("[DWSAssistant] card recovery pending; original action was not replayed");
+        }).finally(() => cardRecoveries.delete(card.outTrackId));
+        cardRecoveries.set(card.outTrackId, recovery);
+        track(recovery);
+      }
+      return true;
+    }
     const action = card.actions[Number(match[2])];
     if (!action) {
       return true;
     }
-    store.card({ ...card, consumed: true });
+    store.card({ ...card, consumed: true, operationId: randomUUID(), operationState: "running", operationStartedAt: now() });
     // Return to Stream immediately; the model and DWS network call do not hold its acknowledgement.
     const values = Object.fromEntries(
       card.fields.flatMap((field) => {
@@ -936,14 +986,22 @@ export function createAssistant(api, config, dependencies = {}) {
       }),
     );
     track(
-      operation(card, action, values).catch(async (error) => {
+      operation(card, action, values).then(() => {
+        const latest = store.getCard(card.id);
+        if (latest) store.card({ ...latest, operationState: "completed", operationFinishedAt: now() });
+      }).catch(async (error) => {
+        const latest = store.getCard(card.id);
+        if (latest) store.card({ ...latest, operationState: "failed", operationFinishedAt: now() });
         api.logger?.warn?.("[DWSAssistant] card operation did not complete");
+        const sent = card.refs?.length && card.refs.every((r) => store.draft(r.id)?.status === "sent");
         try {
           await show(
             card.name,
             { ...card.args, draftValues: values },
             card.outTrackId,
-            `操作未完成：${error.code ? "请检查服务状态。" : error.message}`,
+            sent ? "发送已完成，正在恢复卡片显示；无需再次发送。" :
+              error.code === "DWS_CARD_UPDATE_FAILED" ? "卡片暂时未能更新，正在恢复显示。请核对最新状态后再操作；如仍无变化，请发送 /dws。" :
+              `操作未完成：${error.code ? "请检查服务状态。" : error.message}`,
           );
         } catch {
           /* Command fallback remains available. */
