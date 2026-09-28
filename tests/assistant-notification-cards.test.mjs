@@ -161,7 +161,7 @@ test("restart reuses durable notification coverage while the existing card remai
   await f.flush();
   assert.equal(f.cards.length, count);
 });
-test("failed card delivery does not consume notification coverage or suppress retry", async (t) => {
+test("uncertain new card delivery never blindly retries another card", async (t) => {
   let attempts = 0;
   const f = await setup(t, {
     transport: {
@@ -175,8 +175,12 @@ test("failed card delivery does not consume notification coverage or suppress re
   await f.flush();
   assert.equal(f.assistant.store.get("notificationCoverage"), undefined);
   await f.flush(30000);
-  assert.equal(attempts, 2);
-  assert.equal(f.assistant.store.get("notificationCoverage")[d.id].version, d.version);
+  assert.equal(attempts, 1);
+  assert.equal(f.assistant.store.listCards().find(c => c.refs.some(r => r.id === d.id)).deliveryState, "unknown");
+  await f.assistant.stop();
+  await f.assistant.start({ stateDir: f.dir });
+  await f.flush();
+  assert.equal(attempts, 1);
 });
 test("regenerating from the original notification updates that card without a second push", async (t) => {
   let fail = false;

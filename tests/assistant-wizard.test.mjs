@@ -18,7 +18,7 @@ test("automatic authorization requires all steps and final confirmation ignores 
   const card = f.lastCard();
   assert.match(
     f.cards.findLast((x) => x.data.card_status === "pending").data.description,
-    /G1[\s\S]*G2[\s\S]*已收到[\s\S]*1小时/,
+    /G1[\s\S]*G2[\s\S]*已收到[\s\S]*1\s*小时/,
   );
   await f.act(card, "save-auto", {
     scope: "all",

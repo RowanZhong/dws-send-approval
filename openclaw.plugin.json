@@ -119,6 +119,15 @@
                 "maximum": 60,
                 "default": 10,
                 "description": "Lightweight card expiry checks; independent of card lifetime and storage cleanup."
+              },
+              "presentationVersion": {
+                "type": "integer",
+                "enum": [
+                  2,
+                  3
+                ],
+                "default": 2,
+                "description": "Card presentation version. Select 3 only after publishing and validating the rich template; keeps one active template ID."
               }
             }
           },

@@ -65,6 +65,9 @@ test("selected batch authorizes only displayed exact versions, not future or off
   assert.equal(f.sends.length, 0);
   const c2 = await f.assistant.show("inbox");
   await f.act(c2, "send-selected", { selected: [String(first.id), String(second.id)] });
+  assert.equal(f.sends.length, 0);
+  assert.equal(f.lastCard().name, "batch-review");
+  await f.act(f.lastCard(), "confirm-batch");
   assert.equal(f.sends.length, 2);
   assert.equal(f.assistant.store.draft(later.id).status, "pending");
 });

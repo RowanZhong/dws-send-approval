@@ -5,6 +5,7 @@ import { eligibleTopics, normalizeTopicDecision, topicDisposition, TOPIC_REASONS
 import { randomUUID } from "node:crypto";
 import { createCardTransport } from "./card-transport.mjs";
 import { createCardUpdateQueue } from "./card-update-queue.mjs";
+import { renderContent, inactiveContent, upgradeDestination } from "./assistant-card-presentation.mjs";
 import { fixedReplyRows } from "./assistant-fixed-rules.mjs";
 import { createContextReader, messageTime } from "./assistant-context.mjs";
 import { createDraftRuntime } from "./assistant-draft-runtime.mjs";
@@ -36,6 +37,7 @@ import { previewLiteral } from "./send-preview.mjs";
 
 const NAV = new Set([
   "fixed-replies", "fixed-new", "fixed-detail",
+  "message-detail",
   ...TOPIC_PAGES,
   "home",
   "listen",
@@ -68,7 +70,8 @@ export function createAssistant(api, config, dependencies = {}) {
     now = dependencies.now ?? Date.now;
   const sender = dependencies.send ?? ((d) => sendExact(config, d));
   const complete = dependencies.draft ?? ((d, h, m, s) => drafting.draft(d, h, m, s));
-  const drafting = createDraftRuntime(api, config, { store, now, runner: dependencies.draftToolRunner, auditTools: dependencies.auditDraftTools });
+  const drafting = createDraftRuntime(api, config, { store, now, runner: dependencies.draftToolRunner, auditTools: dependencies.auditDraftTools,
+    onProgress: (id) => { if (!closed) track(refreshCards(id).catch(() => {})); } });
   const resolve =
     dependencies.resolve ??
     ((kind, raw, existing) =>
@@ -221,22 +224,10 @@ export function createAssistant(api, config, dependencies = {}) {
     await transport()?.updateCard({
       accountId: config.accountId,
       ownerUserId: config.ownerUserId,
-      templateId: config.assistant.cardTemplateId,
+      templateId: card.templateId ?? config.assistant.cardTemplateId,
       outTrackId: card.outTrackId,
       transport: card.transport ?? "legacy",
-      data: {
-        title: "代回复助手 · 已失效",
-        description: `${card.invalidated || "卡片已到期"}。\n请单独发送 /dws 打开新卡。`,
-        card_status: "expired",
-        card_expires_note: "卡片已失效",
-        form: { fields: [] },
-        ...Object.fromEntries(
-          Array.from({ length: 6 }, (_, i) => [
-            [`button${i + 1}`, ""],
-            [`action${i + 1}`, ""],
-          ]).flat(),
-        ),
-      },
+      data: inactiveContent(card, now()),
     });
     const latest = store.getCard(card.id);
     if (latest?.invalidated) store.card({ ...latest, inactivePainted: true, inactivePaintedAt: now() });
@@ -375,13 +366,15 @@ export function createAssistant(api, config, dependencies = {}) {
     }
     const view = buildView(name, state(), args),
       id = randomUUID(),
-      outTrackId = replace ?? `dws-assistant-${randomUUID()}`;
+      outTrackId = replace ?? options.reservedTrack ?? `dws-assistant-${randomUUID()}`;
     const card = {
       id,
       outTrackId,
       owner: config.ownerUserId,
       accountId: config.accountId,
       protocol: 2,
+      templateId: config.assistant.cardTemplateId,
+      presentationVersion: config.assistant.cards.presentationVersion,
       transport: previous?.transport ?? (replace ? "legacy" : transport().mode?.() ?? "legacy"),
       deliveryState: "pending",
       fieldPrefix: `f_${id.replaceAll("-", "")}_`,
@@ -424,6 +417,7 @@ export function createAssistant(api, config, dependencies = {}) {
       ...actions,
       title: view.title,
       description: [notice, view.description].filter(Boolean).join("\n\n"),
+      ...(card.presentationVersion === 3 ? renderContent(view, notice) : {}),
       card_expires_note: `卡片有效期至 ${new Date(card.expires).toLocaleString("zh-CN", { timeZone: settings().notifications.timezone, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}`,
       form: {
         fields: cardFormFields(view.fields).map((field) => ({
@@ -599,6 +593,7 @@ export function createAssistant(api, config, dependencies = {}) {
       topicRevision: settings().topics.revision,
       topic: manual && d.topic ? { ...d.topic, reasonLabel: "本人要求重新拟稿", decision: { outcome: "review", reason: "ambiguous" } } : d.topic,
       status: "generating",
+      draftPhase: undefined,
       errorCode: undefined,
       version: d.version + 1,
       updated: now(),
@@ -790,6 +785,7 @@ export function createAssistant(api, config, dependencies = {}) {
       ![
         "send",
         "send-selected",
+        "confirm-batch",
         "ignore",
         "ignore-selected",
         "edit-send",
@@ -1006,9 +1002,14 @@ export function createAssistant(api, config, dependencies = {}) {
       return show("draft", { id: card.refs[0].id }, replace);
     } else if (action.op === "send-selected") {
       const refs = selected(card, v);
-      refs.forEach((r) => {
-        authorizeDraft(currentDraft(r));
-      });
+      const review = refs.map((r) => { const d = currentDraft(r); authorizeDraft(d);
+        return { ...r, text: d.text, label: buildView("draft", state(), { id: d.id }).content.summary[0] }; });
+      return show("batch-review", { review }, replace);
+    } else if (action.op === "confirm-batch") {
+      if (card.name !== "batch-review" || !card.refs.length || card.refs.length > 3) throw new Error("确认页面已失效。");
+      const refs = card.refs;
+      refs.forEach((r) => { const d = currentDraft(r); authorizeDraft(d);
+        if (d.text !== card.args.review.find((row) => row.id === r.id)?.text) throw new Error("回复正文已变化，请重新核对。"); });
       for (const ref of refs) {
         await deliver(ref);
       }
@@ -1036,6 +1037,38 @@ export function createAssistant(api, config, dependencies = {}) {
       return false;
     }
     const card = store.getCard(match[1]);
+    const trusted = card && card.owner === input.userId && card.accountId === input.accountId &&
+      (card.transport ?? "legacy") === (input.transport ?? "legacy") && card.outTrackId === input.outTrackId;
+    const currentHead = trusted && store.cardForTrack(card.outTrackId);
+    // Upgraded tokens retain navigation authority only, including old consumed
+    // aliases. No supplied form values or old action parameters reach a mutation.
+    if (trusted && currentHead?.upgrade) {
+      if (currentHead.expires <= now()) {
+        store.card({ ...currentHead, inactivePainted: false, nextPaintAttemptAt: 0 });
+        track(paintInactive(store.getCard(currentHead.id)).catch(() => {}));
+      } else if (!currentHead.upgradeRecovery && !cardRecoveries.has(card.outTrackId)) {
+        const destination = upgradeDestination(currentHead, store);
+        const targetTrack = `dws-assistant-${randomUUID()}`;
+        store.card({ ...currentHead, upgradeRecovery: { targetTrack, state: "reserved", at: now() }, inactivePainted: false, nextPaintAttemptAt: 0 });
+        const oldAction = card.actions?.[Number(match[2])]?.op;
+        const notice = ["send", "send-selected", "confirm-batch", "edit-send"].includes(oldAction)
+          ? "助手已升级，本次点击未执行发送。请核对当前回复与状态后重新确认。"
+          : "助手已升级，本次操作未执行。请在新版页面继续处理。";
+        const recovery = show(destination.name, destination.args, undefined, notice,
+          { reservedTrack: targetTrack, lane: currentHead.lane }).then(() => {
+            const latest = store.getCard(currentHead.id);
+            store.card({ ...latest, upgradeRecovery: { ...latest.upgradeRecovery, state: "delivered" } });
+          }).catch(() => {
+            const latest = store.getCard(currentHead.id);
+            store.card({ ...latest, upgradeRecovery: { ...latest.upgradeRecovery, state: "unknown" } });
+          }).finally(async () => {
+            cardRecoveries.delete(card.outTrackId);
+            await paintInactive(store.getCard(currentHead.id)).catch(() => {});
+          });
+        cardRecoveries.set(card.outTrackId, recovery); track(recovery);
+      }
+      return true;
+    }
     if (
       !card ||
       card.owner !== input.userId ||
@@ -1135,8 +1168,11 @@ export function createAssistant(api, config, dependencies = {}) {
     has: (event) => !closed && store.seen(messageKey(event, config.profile)),
     async start(ctx) {
       await store.open(ctx.stateDir);
-      await drafting.start(ctx.stateDir);
-      try { managedTransport?.start(); } catch (error) { store.close(); throw error; }
+      if (store.get("cardPresentation")?.version === 3 && config.assistant.cards.presentationVersion !== 3) {
+        store.close(); throw new Error("卡片展示不能直接降级；请先执行经验证的部署回退流程。");
+      }
+      try { await drafting.start(ctx.stateDir); managedTransport?.start(); }
+      catch (error) { drafting.stop(); managedTransport?.stop(); store.close(); throw error; }
       closed = false;
       observedTransport = undefined;
       reconcileCardTransport();
@@ -1146,8 +1182,23 @@ export function createAssistant(api, config, dependencies = {}) {
         store.set("settings", initialSettings());
       }
       settings();
+      const presentation = { version: config.assistant.cards.presentationVersion, templateId: config.assistant.cardTemplateId };
+      const previousPresentation = store.get("cardPresentation");
+      if (presentation.version === 3) {
+        let migrated = false;
+        for (const card of store.listCards()) {
+          if (!card.upgrade && ((card.presentationVersion ?? 2) !== 3 || card.templateId !== presentation.templateId)) {
+            migrated = true;
+            store.card({ ...card, templateId: card.templateId ?? previousPresentation?.templateId,
+              invalidated: "助手已升级", invalidatedAt: now(), upgrade: { version: 3, at: now() },
+              inactivePainted: false, nextPaintAttemptAt: 0, retryUpdate: false });
+          }
+        }
+        if (migrated) store.set("cardUpgradeNotificationCoverage", Object.fromEntries(store.list(attentionStates).map((d) => [d.id, d.version])));
+      }
+      store.set("cardPresentation", presentation);
       notifications.start();
-      for (const draft of store.list(attentionStates)) notice(draft);
+      for (const draft of unnotifiedDrafts(store, store.list(attentionStates), now())) notice(draft);
       for (const card of store.listCards()) {
         if (!card.invalidated && card.protocol !== 2) store.card({ ...card, invalidated: "旧版卡片已停用", invalidatedAt: now() });
       }

@@ -40,7 +40,8 @@
             "draftTtlMinutes": 1440,
             "cardTtlMinutes": 30,
             "cards": {
-              "expiryCheckSeconds": 10
+              "expiryCheckSeconds": 10,
+              "presentationVersion": 2
             },
             "storage": {
               "retentionDays": 7,

@@ -16,5 +16,11 @@
   "assistantSourceCommits": {
     "modern": "a332da7",
     "legacy": "aba37a7"
+  },
+  "richCardComponent": {
+    "source": "docs/assets/card-template-v2.json",
+    "commit": "8a73a59fd8513a89e5f2219adaec61c7c4ceab9a",
+    "sourceSha256": "735f014b78b5ba02c96a85fe01da3ac3b55b4dd1e8e744a46df06b8984fdae30",
+    "component": "MarkdownBlock"
   }
 }

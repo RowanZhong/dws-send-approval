@@ -195,6 +195,10 @@ export class AssistantStore {
       .map((r) => JSON.parse(r.body));
   }
   expiredCards(now, limit = 100) {
+    this.db.prepare(`UPDATE cards SET body=json_set(body,'$.inactivePainted',json('false'),
+      '$.nextPaintAttemptAt',0,'$.upgradeEntryExpired',json('true')) WHERE id IN
+      (SELECT card_id FROM card_heads) AND expires<=? AND json_extract(body,'$.upgrade') IS NOT NULL
+      AND coalesce(json_extract(body,'$.upgradeEntryExpired'),0)=0`).run(now);
     return this.db.prepare(`SELECT body FROM cards
       WHERE id IN (SELECT card_id FROM card_heads) AND json_extract(body,'$.invalidated') IS NULL AND expires<=?
       ORDER BY expires,id LIMIT ?`).all(now, limit).map((r) => JSON.parse(r.body));
@@ -279,6 +283,9 @@ export class AssistantStore {
       const coverage = this.get("notificationCoverage");
       if (coverage) this.set("notificationCoverage", Object.fromEntries(Object.entries(coverage)
         .filter(([id, r]) => this.draft(id) && this.cardForTrack(r.track)?.expires > now)));
+      const upgradeCoverage = this.get("cardUpgradeNotificationCoverage");
+      if (upgradeCoverage) this.set("cardUpgradeNotificationCoverage", Object.fromEntries(Object.entries(upgradeCoverage)
+        .filter(([id, version]) => this.draft(id)?.version === version)));
       this.set("storageMaintenance", { at: now, bodiesDeleted, cardsDeleted });
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }

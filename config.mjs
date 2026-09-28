@@ -47,12 +47,13 @@ export function readConfig(raw = {}, { discovery = false } = {}) {
     cardTemplateId: "",
     ...raw.assistant,
   };
-  const cards = { expiryCheckSeconds: 10, ...assistant.cards };
+  const cards = { expiryCheckSeconds: 10, presentationVersion: 2, ...assistant.cards };
   if ((assistant.cards !== undefined && (!assistant.cards || typeof assistant.cards !== "object" || Array.isArray(assistant.cards))) ||
       !Number.isInteger(cards.expiryCheckSeconds) || cards.expiryCheckSeconds < 5 || cards.expiryCheckSeconds > 60) {
     throw new Error("assistant.cards.expiryCheckSeconds must be 5..60");
   }
   assistant.cards = Object.freeze(cards);
+  if (![2, 3].includes(cards.presentationVersion)) throw new Error("assistant.cards.presentationVersion must be 2 or 3; publish and validate the matching template before selecting 3");
   const storage = { retentionDays: 7, expiredCardRetentionHours: 24, cleanupIntervalSeconds: 300,
     dedupeRetentionDays: 30, ...assistant.storage };
   if (assistant.storage !== undefined && (!assistant.storage || typeof assistant.storage !== "object" || Array.isArray(assistant.storage))) {

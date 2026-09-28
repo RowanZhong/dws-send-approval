@@ -47,6 +47,7 @@
 <li>assistant.context.historyMinutes 默认 5、0 关闭；读取同会话并限定双方，最多 50 条、12000 字符，按时间排序且去重触发消息；使用可用文字投影，不下载附件。</li>
 <li>assistant.directBatch.mergeGapSeconds 默认 30；每批最长 5 分钟、最多 200 条；批次只保存成员引用。草稿版本隔离迟到输出，发送领取后冻结批次，超长输入显式失败。</li>
 <li>通过宿主 subagent 的独立会话执行，deliver:false；专用 Agent 的精确工具集、独立目录、OpenClaw runtime、Code Mode 关闭及已审计插件均须预检。默认 120 秒预算，持久化任务状态并清理已结束会话。宿主按 Agent 的配置差异以 2026.7.1-2/2026.8.1 实测为准。</li>
+<li>单一当前模板配置，assistant.cards.presentationVersion 缺省 2；平台发布 v3 后才显式切换。先停用旧权威再刷新提示，恢复卡片持久化去重，投递未知不自动重发；富文本变量按字面转义外部正文。</li>
 </ul>
 <!-- staged-upgrade:end -->
 <p><strong>开发及运维指南 · 0.8.0 · 2026-09-27</strong></p>

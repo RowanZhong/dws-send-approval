@@ -2,6 +2,7 @@ import { buildTopicView } from "./assistant-topic-views.mjs";
 import { buildConfigView } from "./assistant-config-views.mjs";
 import { targetInput } from "./assistant-directory.mjs";
 import { batchMembers } from "./assistant-batches.mjs";
+import { structureView, excerpt } from "./assistant-card-presentation.mjs";
 import { PENDING, EDITABLE } from "./assistant-store.mjs";
 
 const button = (label, op, extra = {}) => ({ label, op, ...extra });
@@ -41,7 +42,7 @@ export function draftStatusLabel(d) {
 export function draftBodyLabel(d) {
   if (d.text) return d.text;
   if (d.status === "inbox") return "已整理，按设置不生成回复。";
-  if (d.status === "generating") return "正在生成回复，请稍候。";
+  if (d.status === "generating") return d.draftPhase === "querying" ? "正在查询资料并整理回复，请稍候。" : "正在生成回复，请稍候。";
   if (d.status === "classifying") return "正在识别主题，随后按设置处理。";
   if (d.status === "filtered") return "按“只关注指定主题”设置过滤，不生成回复。";
   if (d.status === "draft-error") return "起草未成功，可重试起草或手动填写。";
@@ -51,8 +52,9 @@ export function draftBodyLabel(d) {
 export function draftLabel(d, directory = []) {
   const name = (kind, id, fallback) => {
     const display = directory.find((x) => x.kind === kind && x.id === id)?.name || fallback;
+    const duplicate = directory.some((r) => r.kind === kind && r.id !== id && r.name === display);
     return display
-      ? `${String(display).replace(/\p{C}/gu, " ").slice(0, 60)} (${id.slice(-8)})`
+      ? `${String(display).replace(/\p{C}/gu, " ").slice(0, 60)}${duplicate ? ` (${id.slice(-8)})` : ""}`
       : id;
   };
   const sender = name("user", d.event.sender_open_dingtalk_id, d.event.sender);
@@ -80,7 +82,7 @@ export function buildView(name, state, args = {}) {
       button("查看待回复", "inbox"),
       button("监听范围", "listen"),
       button("回复方式", "reply"),
-      button("自动答复与提醒", "automation"),
+      button("固定回复与提醒", "automation"),
       button("处理记录", "history"),
       button(prefs.enabled ? "暂停全部" : "开启监听", "toggle"),
     ];
@@ -91,6 +93,12 @@ export function buildView(name, state, args = {}) {
     if (settings.topics?.enabled && health?.state === "degraded") {
       view.description += `\n\n主题识别异常：${health.reason === "busy" ? "暂时繁忙" : health.reason === "invalid" ? "结果无效" : "调用未完成"}。\n最近异常：${new Date(health.lastFailureAt).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone })}；累计影响 ${health.affectedCount} 条。\n消息已按未明确命中的设置处理，恢复后不会自动补发。`;
     }
+    view.content = { status: `监听${prefs.enabled ? "已开启" : "已关闭"} · 待处理 ${count} 条`,
+      summary: [`连接状态：${{ off: "已关闭", ready: "就绪", starting: "连接中", failed: "故障", unavailable: "初始化中" }[listener.state] || "待检查"}`,
+        `普通回复：${{ ai: "AI 起草，我确认", fixed: "固定正文，我确认", inbox: "只整理消息", off: "不处理" }[prefs.reply.default.mode] || "按设置处理"}`],
+      sections: [{ title: "监听范围", text: `私聊：${{ off: "关闭", all: "全部", users: "指定人员" }[prefs.rules.dm.mode]}\n群 @本人：${{ off: "关闭", all: "所有群", groups: "指定群" }[prefs.rules.at.mode]}\n额外发送者：${prefs.rules.sender.ids.length} 人` },
+        { title: "主题与授权", text: `主题识别：${settings.topics?.enabled ? "开启" : "关闭"}\n有效普通自动授权：${settings.autoRules.filter((r) => r.expires > Date.now()).length} 条\n有效主题自动授权：${settings.topics?.enabled ? settings.topics.rules.filter((r) => r.enabled && r.action === "auto" && r.expires > Date.now()).length : 0} 条` }],
+      notices: view.description.split("\n\n").slice(1) };
   } else if (name === "listen") {
     const describe = (key, kind) => {
       const rule = prefs.rules[key];
@@ -210,11 +218,9 @@ export function buildView(name, state, args = {}) {
     if (!d) {
       throw new Error("这条记录不存在或已清理。");
     }
-    view.title = `#${d.id}-${d.version} · ${draftLabel(d, directory)}`;
-    const bodyTitle = !d.text ? "回复状态" : ({
-      sent: "已发送", sending: "正在发送", unknown: "发送结果待核实",
-      pending: "将以你的身份回复",
-    }[d.status] ?? "回复草稿") + " · 完整正文";
+    view.title = { draft: "回复详情", edit: "修改回复", regenerate: "重新起草", pause: "暂停此会话" }[name];
+    const bodyTitle = !d.text ? "回复状态" : ({ sent: "已发送", sending: "正在发送", unknown: "发送结果待核实",
+      pending: "将以你的身份回复" }[d.status] ?? "回复草稿") + " · 完整正文";
     view.description = `${draftStatusLabel(d)}\n${d.reply.direct ? "私聊回复" : "引用回复此条群消息"}\n原消息：${d.event.content.slice(0, 3000)}\n\n${bodyTitle}：\n${draftBodyLabel(d)}${d.error ? `\n${d.error}` : ""}${d.topic ? `\n\n消息主题：${d.topic.name || "未确定"} · ${d.topic.reasonLabel || "待核对"}` : ""}`;
     if (d.batch?.memberIds.length > 1) {
       const members = batchMembers(store, d);
@@ -222,7 +228,11 @@ export function buildView(name, state, args = {}) {
         members.slice(-3).map((m) => `${new Date(m.event.timestamp < 100000000000 ? m.event.timestamp * 1000 : m.event.timestamp).toLocaleTimeString("zh-CN", { timeZone: settings.notifications.timezone, hour12: false })}\n${m.event.content.slice(0, 1000)}`).join("\n\n") +
         `\n\n${bodyTitle}：\n${draftBodyLabel(d)}${d.error ? `\n${d.error}` : ""}`;
     }
-    if (d.contextStatus?.partial) view.description += "\n\n近期上下文未完整取得；请核对回复，也可补充资料后重新起草。";
+    const contextNotice = d.contextStatus?.partial ? (PENDING.has(d.status)
+      ? "近期上下文未完整取得；请核对回复，也可补充资料后重新起草。"
+      : "起草时未完整取得近期上下文。")
+      : d.contextStatus?.messageCount > 0 ? `起草参考：${d.contextStatus.messageCount} 条近期对话文字，未读取附件内容。` : "";
+    if (contextNotice) view.description += `\n\n${contextNotice}`;
     view.refs = [{ id: d.id, version: d.version }];
     if (name === "edit") {
       view.description = `接收对象与原消息不变。${d.reply.direct ? "" : "发送时引用此条群消息。"}修改后点击发送即发送输入框中的完整正文。\n原消息：${d.event.content.slice(0, 160)}`;
@@ -247,7 +257,7 @@ export function buildView(name, state, args = {}) {
         text("hint", "补充写作要求"),
         text("material", "本人补充资料（仅用于本条，不加入自动答复）"),
       ];
-      view.buttons = [button("重新拟稿", "generate"), button("返回草稿", "draft", { id: d.id })];
+      view.buttons = [button("重新起草", "generate"), button("返回草稿", "draft", { id: d.id })];
     } else if (name === "pause") {
       view.description = "暂停这个会话，现有待处理草稿将忽略。到期恢复监听，不自动重发旧消息。";
       view.fields = [
@@ -270,16 +280,52 @@ export function buildView(name, state, args = {}) {
     } else if (PENDING.has(d.status)) {
       view.buttons = [
         ...(d.ownerReplyAt && d.text && d.status === "stale" ? [button("已核对，仍需回复", "ack-owner-reply")] : []),
-        ...(d.status === "pending" ? [button("发送", "send")] : []),
+        ...(d.status === "pending" ? [button("确认发送", "send")] : []),
         ...(EDITABLE.has(d.status) ? [button("修改", "edit", { id: d.id })] : []),
-        button("重新拟稿", "regenerate", { id: d.id }),
+        button(d.status === "draft-error" ? "重试起草" : d.text ? "重新起草" : "生成草稿", "regenerate", { id: d.id }),
         button("忽略", "ignore"),
         button("我来处理", "pause", { id: d.id }),
-        home,
+        button("查看来信全文", "message-detail", { id: d.id }),
       ];
     } else {
       view.buttons = [button("查看待回复", "inbox"), home];
     }
+    const allMembers = d.batch?.memberIds?.length ? batchMembers(store, d) : [d];
+    const members = allMembers.slice(-3);
+    const time = (m) => Number.isFinite(Number(m.event.timestamp)) ? new Date(m.event.timestamp < 100000000000 ? m.event.timestamp * 1000 : m.event.timestamp).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "时间未提供";
+    if (name === "draft") view.content = {
+      status: draftStatusLabel(d), summary: [draftLabel(d, directory), d.reply.direct ? "私聊回复" : "引用回复此条群消息", ...(allMembers.length > 1 ? [`连续收到 ${allMembers.length} 条，展示最近 ${members.length} 条`] : [])],
+      sections: [...members.map((m) => { const preview = excerpt(m.event.content, 1000); return { title: `来信 · ${time(m)}`, text: preview.text + (preview.truncated ? "\n（已截取预览，请查看来信全文）" : "") }; }),
+        { title: bodyTitle, text: draftBodyLabel(d) }],
+      notices: [d.error, d.topic && `消息主题：${d.topic.name || "未明确命中"} · ${d.topic.reasonLabel || "按当前规则处理"}`,
+        contextNotice,
+        d.status === "unknown" && "发送结果尚未核实，请先检查会话记录。不会自动重发。"].filter(Boolean),
+    };
+    else view.content = { status: draftStatusLabel(d), summary: [draftLabel(d, directory)],
+      sections: [{ title: name === "edit" ? "修改说明" : name === "regenerate" ? "起草说明" : "暂停说明", text: view.description }], notices: [] };
+  } else if (name === "message-detail") {
+    const d = store.draft(args.id);
+    if (!d) throw new Error("这条记录不存在或已清理。");
+    const members = (d.batch?.memberIds?.length ? batchMembers(store, d) : [d]).slice(-3);
+    const pages = members.flatMap((m, i) => {
+      const chars = Array.from(new Intl.Segmenter("zh", { granularity: "grapheme" }).segment(m.event.content), (x) => x.segment);
+      const chunks = Math.max(1, Math.ceil(chars.length / 2000));
+      return Array.from({ length: chunks }, (_, n) => ({ title: `来信 ${i + 1}/${members.length} · ${n + 1}/${chunks}`, text: chars.slice(n * 2000, (n + 1) * 2000).join("") }));
+    });
+    const page = Math.max(0, Math.min(Number(args.page) || 0, pages.length - 1));
+    view.title = "来信全文"; view.refs = [{ id: d.id, version: d.version }];
+    view.content = { status: `第 ${page + 1}/${pages.length} 页`, summary: [draftLabel(d, directory)], sections: [pages[page]], notices: [] };
+    view.buttons = [...(page > 0 ? [button("上一页", "message-detail", { id: d.id, page: page - 1 })] : []),
+      ...(page + 1 < pages.length ? [button("下一页", "message-detail", { id: d.id, page: page + 1 })] : []), button("返回草稿", "draft", { id: d.id }), home];
+  } else if (name === "batch-review") {
+    const rows = args.review ?? [];
+    const valid = rows.length > 0 && rows.length <= 3 && rows.every((r) => { const d = store.draft(r.id); return d?.status === "pending" && d.version === r.version && d.text === r.text && d.expires > Date.now(); });
+    view.title = "确认发送所选回复";
+    view.refs = rows.map(({ id, version }) => ({ id, version }));
+    view.content = { status: valid ? `待确认 · ${rows.length} 条` : "内容或状态已变化", summary: ["以下各条将以你的身份发送。"],
+      sections: rows.map((r, i) => ({ title: `回复 ${i + 1} · ${r.label}`, text: r.text })),
+      notices: valid ? [] : ["本页已不能发送，请返回待处理列表重新选择并核对。"] };
+    view.buttons = [...(valid ? [button("确认发送以上全部", "confirm-batch")] : []), button("返回待处理", "inbox")];
   } else if (name === "inbox" || name === "history") {
     const history = name === "history",
       page = Math.max(0, Number(args.page) || 0),
@@ -295,7 +341,7 @@ export function buildView(name, state, args = {}) {
       rows
         .map(
           (d) =>
-            `#${d.id} ${draftLabel(d, directory)} · ${labels[d.status]}\n原消息：${d.event.content.slice(0, 160)}\n拟回复：${draftBodyLabel(d)}`,
+            `#${d.id} ${draftLabel(d, directory)} · ${draftStatusLabel(d)}\n原消息：${d.event.content.slice(0, 160)}\n拟回复：${draftBodyLabel(d)}`,
         )
         .join("\n\n");
     view.refs = rows.map((d) => ({ id: d.id, version: d.version }));
@@ -318,9 +364,13 @@ export function buildView(name, state, args = {}) {
         : []),
       home,
     ];
+    view.content = { status: all.length ? `共 ${all.length} 条 · 第 ${page + 1} 页` : "暂无待处理消息",
+      summary: [], sections: rows.map((d) => ({ title: `${draftLabel(d, directory)} · ${draftStatusLabel(d)}`,
+        text: `来信：${excerpt(d.event.content, 100).text}${excerpt(d.event.content, 100).truncated ? "…" : ""}\n回复：${excerpt(draftBodyLabel(d), 80).text}${excerpt(draftBodyLabel(d), 80).truncated ? "…" : ""}` })),
+      notices: rows.length ? ["选择记录查看详情；发送前将完整展示所选回复。"] : [history ? "暂无处理记录。" : "新消息进入处理范围后，会出现在这里。"] };
   } else {
     throw new Error("不支持的页面。");
   }
   view.fields = view.fields.filter((f) => !f.options || f.options.length > 0);
-  return view;
+  return structureView(view);
 }
