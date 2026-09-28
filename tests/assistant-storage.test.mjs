@@ -75,3 +75,21 @@ test("storage config defaults preserve old settings and validate dedupe retentio
   assert.throws(() => readConfig({ ...raw, assistant: { storage: { retentionDays: 7, dedupeRetentionDays: 6 } } }));
   assert.throws(() => readConfig({ ...raw, assistant: { storage: { cleanupIntervalSeconds: 10 } } }));
 });
+
+test("cleanup progresses past protected rows and removes only terminal cleaned Agent sessions", async (t) => {
+  let clock = Date.now();
+  const f = await fixture(t, { now: () => clock });
+  for (let i = 0; i < 201; i++) {
+    const d = f.assistant.store.create(f.event(), f.prefs, { direct: true }, clock);
+    f.assistant.store.put({ ...d, status: "sent", updated: clock, agentRunPending: i < 200 });
+  }
+  f.assistant.store.putDraftRun({ sessionKey: "done", state: "complete", endedAt: clock, sessionDeleted: true });
+  f.assistant.store.putDraftRun({ sessionKey: "unsettled", state: "unsettled", createdAt: clock });
+  f.assistant.store.putDraftRun({ sessionKey: "cleanup-pending", state: "complete", endedAt: clock, sessionDeleted: false });
+  clock += 8 * DAY;
+  assert.equal(f.assistant.store.prune(clock).bodiesDeleted, 0);
+  assert.equal(f.assistant.store.prune(clock).bodiesDeleted, 1);
+  assert.equal(f.assistant.store.draftRun("done"), undefined);
+  assert.ok(f.assistant.store.draftRun("unsettled")); assert.ok(f.assistant.store.draftRun("cleanup-pending"));
+  const stats = f.assistant.store.storageStats(); assert.ok(stats.databaseBytes > 0); assert.equal(typeof stats.walBytes, "number");
+});

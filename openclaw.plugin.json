@@ -176,9 +176,50 @@
                 "default": 30
               }
             }
+          },
+          "drafting": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "toolsEnabled": {
+                "type": "boolean",
+                "default": false,
+                "description": "使用经过只读校验的专用 Agent，默认关闭"
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 600,
+                "default": 120,
+                "description": "Agent 起草等候预算；超时不代表宿主任务已取消"
+              },
+              "agentId": {
+                "type": "string",
+                "pattern": "^[a-z0-9_-]{1,128}$",
+                "description": "受限起草 Agent ID，缺省继承顶层 agentId"
+              },
+              "documentWorkspaceIds": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                },
+                "default": [],
+                "description": "允许检索的知识库范围，留空不开放文档检索"
+              }
+            }
           }
         }
       }
     }
+  },
+  "contracts": {
+    "tools": [
+      "dws_draft_history",
+      "dws_draft_contact",
+      "dws_draft_search",
+      "dws_draft_read"
+    ]
   }
 }

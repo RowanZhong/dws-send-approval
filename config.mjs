@@ -76,6 +76,16 @@ export function readConfig(raw = {}, { discovery = false } = {}) {
     throw new Error("assistant.directBatch.mergeGapSeconds must be 1..300");
   }
   assistant.directBatch = Object.freeze(directBatch);
+  const drafting = { agentId: config.agentId, toolsEnabled: false, timeoutSeconds: 120, documentWorkspaceIds: [], ...assistant.drafting };
+  if ((assistant.drafting !== undefined && (!assistant.drafting || typeof assistant.drafting !== "object" || Array.isArray(assistant.drafting))) ||
+      typeof drafting.toolsEnabled !== "boolean" || !TOKEN.test(drafting.agentId) || drafting.agentId !== drafting.agentId.toLowerCase() ||
+      !Number.isInteger(drafting.timeoutSeconds) || drafting.timeoutSeconds < 10 || drafting.timeoutSeconds > 600 ||
+      !Array.isArray(drafting.documentWorkspaceIds) || drafting.documentWorkspaceIds.length > 20 ||
+      drafting.documentWorkspaceIds.some((id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id))) {
+    throw new Error("assistant.drafting requires a valid agentId, toolsEnabled and documentWorkspaceIds");
+  }
+  drafting.documentWorkspaceIds = Object.freeze([...new Set(drafting.documentWorkspaceIds)]);
+  assistant.drafting = Object.freeze(drafting);
   if (
     typeof assistant.enabled !== "boolean" ||
     typeof assistant.cardTemplateId !== "string" ||

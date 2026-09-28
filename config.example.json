@@ -53,6 +53,10 @@
             },
             "directBatch": {
               "mergeGapSeconds": 30
+            },
+            "drafting": {
+              "toolsEnabled": false,
+              "timeoutSeconds": 120
             }
           }
         }

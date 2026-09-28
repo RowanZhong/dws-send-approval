@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, chmod } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -21,6 +22,7 @@ export class AssistantStore {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await chmod(dir, 0o700);
     const path = join(dir, "assistant.sqlite");
+    this.path = path;
     this.db = new DatabaseSync(path);
     await chmod(path, 0o600);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
@@ -30,6 +32,7 @@ export class AssistantStore {
       CREATE INDEX IF NOT EXISTS draft_conversation ON drafts(conversation,updated);
       CREATE INDEX IF NOT EXISTS draft_status ON drafts(status,updated);
       CREATE TABLE IF NOT EXISTS message_fingerprints (message_key TEXT PRIMARY KEY, expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS draft_runs (session_key TEXT PRIMARY KEY, state TEXT NOT NULL, body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS fingerprint_expiry ON message_fingerprints(expires);
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, expires INTEGER NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS card_heads (track TEXT PRIMARY KEY, card_id TEXT NOT NULL);
@@ -71,6 +74,16 @@ export class AssistantStore {
   get(key) {
     const r = this.db.prepare("SELECT body FROM kv WHERE key=?").get(key);
     return r ? JSON.parse(r.body) : undefined;
+  }
+  draftRun(sessionKey) {
+    const row = this.db.prepare("SELECT body FROM draft_runs WHERE session_key=?").get(sessionKey ?? "");
+    return row ? JSON.parse(row.body) : undefined;
+  }
+  draftRuns() { return this.db.prepare("SELECT body FROM draft_runs").all().map((r) => JSON.parse(r.body)); }
+  putDraftRun(value) {
+    this.db.prepare("INSERT INTO draft_runs VALUES(?,?,?) ON CONFLICT(session_key) DO UPDATE SET state=excluded.state,body=excluded.body")
+      .run(value.sessionKey, value.state, JSON.stringify(value));
+    return value;
   }
   set(key, value) {
     this.db
@@ -230,8 +243,11 @@ export class AssistantStore {
     this.expireDrafts(now);
     const liveRefs = new Set(this.listCards().filter((c) => c.expires > now ||
       (c.invalidated && !c.inactivePainted && (c.invalidatedAt ?? c.expires) > now - 7 * DAY)).flatMap((c) => c.refs?.map((r) => r.id) ?? []));
-    const candidates = this.db.prepare(`SELECT body FROM drafts WHERE status IN ('sent','ignored','expired','superseded','suppressed','filtered')
-      AND updated<? ORDER BY updated LIMIT 200`).all(now - retentionDays * DAY).map((r) => JSON.parse(r.body))
+    const scanAfter = this.get("pruneCursor") ?? 0;
+    const scanned = this.db.prepare(`SELECT body FROM drafts WHERE status IN ('sent','ignored','expired','superseded','suppressed','filtered')
+      AND updated<? AND id>? ORDER BY id LIMIT 200`).all(now - retentionDays * DAY, scanAfter).map((r) => JSON.parse(r.body));
+    this.set("pruneCursor", scanned.length === 200 ? scanned.at(-1).id : 0);
+    const candidates = scanned
       .filter((d) => !liveRefs.has(d.id) && (d.terminalAt ?? d.updated) < now - retentionDays * DAY && !d.agentRunPending);
     this.db.exec("BEGIN IMMEDIATE");
     let bodiesDeleted = 0, cardsDeleted = 0;
@@ -257,6 +273,9 @@ export class AssistantStore {
       this.db.prepare("DELETE FROM card_heads WHERE card_id NOT IN (SELECT id FROM cards)").run();
       this.db.prepare("DELETE FROM message_fingerprints WHERE message_key IN (SELECT message_key FROM message_fingerprints WHERE expires<? LIMIT 500)").run(now);
       this.db.prepare("DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE key LIKE 'cooldown:%' AND CAST(body AS INTEGER)<? LIMIT 200)").run(now - DAY);
+      this.db.prepare(`DELETE FROM draft_runs WHERE session_key IN (SELECT session_key FROM draft_runs
+        WHERE state IN ('complete','error','rejected') AND json_extract(body,'$.sessionDeleted')=1
+        AND json_extract(body,'$.endedAt')<? LIMIT 200)`).run(now - retentionDays * DAY);
       const coverage = this.get("notificationCoverage");
       if (coverage) this.set("notificationCoverage", Object.fromEntries(Object.entries(coverage)
         .filter(([id, r]) => this.draft(id) && this.cardForTrack(r.track)?.expires > now)));
@@ -269,7 +288,10 @@ export class AssistantStore {
   }
   storageStats() {
     const value = (sql) => Object.values(this.db.prepare(sql).get())[0];
+    const bytes = (path) => { try { return statSync(path).size; } catch { return 0; } };
     return { drafts: value("SELECT count(*) FROM drafts"), cards: value("SELECT count(*) FROM cards"),
+      databaseBytes: bytes(this.path), walBytes: bytes(this.path + "-wal"),
+      draftRuns: value("SELECT count(*) FROM draft_runs"),
       fingerprints: value("SELECT count(*) FROM message_fingerprints"),
       pageBytes: value("PRAGMA page_size"), pages: value("PRAGMA page_count"), reusablePages: value("PRAGMA freelist_count"),
       lastCleanup: this.get("storageMaintenance") };

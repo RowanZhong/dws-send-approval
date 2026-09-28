@@ -6,6 +6,7 @@ import { assertHostVersion, readConfig } from "./config.mjs";
 import { createPolicy } from "./policy.mjs";
 import { runtimeBinding } from "./runtime-binding.mjs";
 import { SourceStore } from "./source-store.mjs";
+import { isDraftSession, DRAFT_TOOLS } from "./assistant-draft-policy.mjs";
 
 export default definePluginEntry({
   id: "dws-send-approval",
@@ -27,9 +28,18 @@ export default definePluginEntry({
     }
     const binding = runtimeBinding(config);
     const policy = createPolicy(config, store);
-    api.on("before_tool_call", (...args) => (binding.peek()?.policy ?? policy)(...args), {
+    const drafting = () => { try { return binding.peek()?.requireRuntime()?.assistant?.drafting; } catch { return undefined; } };
+    api.on("before_tool_call", (event, ctx) => {
+      if (isDraftSession(ctx?.sessionKey) || config.assistant.drafting.toolsEnabled && ctx?.agentId === config.assistant.drafting.agentId) {
+        const active = drafting();
+        return active ? active.policy.before(event, ctx) : { block: true, blockReason: "起草任务权限尚未就绪，工具调用已拒绝。" };
+      }
+      return (binding.peek()?.policy ?? policy)(event, ctx);
+    }, {
       priority: 1000,
     });
+    if (api.registerTool) api.registerTool((ctx) => isDraftSession(ctx?.sessionKey) ? drafting()?.tools(ctx) ?? [] : [], { names: [...DRAFT_TOOLS], optional: true });
+    else if (config.assistant.drafting.toolsEnabled) throw new Error("宿主缺少只读起草工具注册接口。");
     const identity = createIdentityService(api, config);
     registerControlCommands(api, config, {
       status: (...args) =>
