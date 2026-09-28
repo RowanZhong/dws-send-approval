@@ -169,7 +169,7 @@ test("deterministic sender uses argv, fixed profile and exact origin with CLI co
     },
   );
   assert.equal(args[args.indexOf("--chat-id") + 1], "cid_1");
-  assert.equal(args[args.indexOf("--text") + 1], "$(do not run)");
+  assert.equal(args[args.indexOf("--text") + 1], "\\$\\(do not run\\)");
   assert.ok(args.includes("--yes"));
   assert.ok(!args.includes("--file"));
 });

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { safeText } from "./assistant-settings.mjs";
 import { stableId } from "./preferences.mjs";
+import { textParagraphs } from "./assistant-card-presentation.mjs";
 
 export function runDws(config, args, { spawnChild = spawn, timeoutMs = 20000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -59,6 +60,10 @@ export async function sendExact(config, draft, runner = runDws) {
     throw Object.assign(new Error("来源会话ID无效，未发送。"), { noSend: true });
   }
   const text = safeText(draft.text);
+  // DWS personal send/reply transports even --text as Markdown. Encode the
+  // reviewed literal text so newlines and punctuation survive rendering.
+  // Keep the stored draft and idempotency digest based on the original text.
+  const wireText = textParagraphs(text);
   const quoted = draft.reply?.direct !== true;
   const event = draft.event;
   if (quoted && (!stableId(event.message_id) || !stableId(event.sender_open_dingtalk_id))) {
@@ -91,7 +96,7 @@ export async function sendExact(config, draft, runner = runDws) {
         "--idempotency-key",
         key,
         "--text",
-        text,
+        wireText,
         "--yes",
         "--format",
         "json",
@@ -104,7 +109,7 @@ export async function sendExact(config, draft, runner = runDws) {
         "--chat-id",
         draft.event.conversation_id,
         "--text",
-        text,
+        wireText,
         "--title",
         "消息",
         "--yes",

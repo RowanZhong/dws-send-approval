@@ -36,9 +36,24 @@ test("group replies bind original message, sender and conversation through argv"
   assert.equal(args[1], "+messages-reply");
   assert.equal(args[args.indexOf("--message-id") + 1], "msg-original");
   assert.equal(args[args.indexOf("--ref-sender") + 1], "D-sender");
-  assert.equal(args[args.indexOf("--text") + 1], draft().text);
+  assert.equal(args[args.indexOf("--text") + 1], "收到；\\$\\(literal\\)");
   assert.ok(args.includes("--yes"));
   assert.ok(!args.includes("+messages-send"));
+});
+test("personal and quoted sends preserve reviewed newlines and literal punctuation through Markdown transport", async () => {
+  const original = "第一行\r\n第二行\n*星号* [文字] <文字> @所有人 &";
+  const expected = "第一行\n\n第二行\n\n\\*星号\\* \\[文字\\] &lt;文字&gt; \\@所有人 &amp;";
+  for (const direct of [true, false]) {
+    const d = { ...draft(), text: original, reply: { direct } };
+    let calls = 0;
+    await sendExact(config, d, async (_, args) => {
+      calls++;
+      assert.equal(args[args.indexOf("--text") + 1], expected);
+      return direct ? { ok: true, identity: "user", tool: "send_personal_message" } : receipt(args);
+    });
+    assert.equal(calls, 1);
+    assert.equal(d.text, original);
+  }
 });
 test("reply idempotency stays stable for the same reviewed payload and changes with target or text", async () => {
   const keys = [];
