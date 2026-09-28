@@ -57,12 +57,13 @@ export class AssistantStore {
     for (const row of this.list(["sending", "generating", "classifying"], 10000)) {
       this.put({
         ...row,
-        status: row.status === "sending" ? "unknown" : row.status === "classifying" ? "topic-review" : "draft-error",
+        status: row.status === "sending" ? "unknown" : "draft-error",
         version: row.version + 1,
+        errorCode: row.status === "sending" ? undefined : "PROCESS_INTERRUPTED",
         error:
           row.status === "sending"
             ? "服务重启，发送结果待核实；不会自动重发。"
-            : row.status === "classifying" ? "主题识别被中断，未自动重试；可修改或重新拟稿。" : "拟稿被中断，可重新拟稿。",
+            : "服务重启，处理被中断；可重新拟稿，本次不会自动补发。",
       });
     }
     // The assistant first registers expiry paints, then runs physical cleanup.

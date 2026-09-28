@@ -38,18 +38,18 @@ test("unmatched topics fall through to ordinary AI or disappear from pending acc
   const d = await f.incoming(f.event()); assert.equal(d.status, "filtered"); assert.equal(f.models.length, 1);
   assert.equal(f.sends.length, 0);
 });
-test("uncertain/partial/excluded results never trigger a broad legacy auto rule in either mode", async (t) => {
+test("uncertain/partial/excluded results follow ordinary authorization or filter according to mode", async (t) => {
   for (const mode of ["only", "fallback"]) for (const reason of ["ambiguous", "partial", "excluded", "conflict"]) {
     const f = await topicFixture(t, { classify: async () => review(reason) }, { mode });
     const s = f.assistant.store.get("settings"); s.autoRules = [{ id: "legacy", scope: "all", target: "", keywords: [], text: "自动旧回复", expires: Date.now()+3600000, cooldownMinutes: 30 }];
     f.assistant.store.set("settings", s);
-    const d = await f.incoming(f.event()); assert.equal(d.status, "topic-review"); assert.equal(f.sends.length, 0); assert.equal(f.models.length, 0);
+    const d = await f.incoming(f.event()); assert.equal(d.status, mode === "only" ? "filtered" : "sent"); assert.equal(f.sends.length, mode === "only" ? 0 : 1); assert.equal(f.models.length, 0);
   }
 });
-test("conflicting semantic and keyword templates require review", async (t) => {
+test("a uniquely matched topic executes that rule instead of a different ordinary template", async (t) => {
   const f = await topicFixture(t), s = f.assistant.store.get("settings");
   s.autoRules = [{ id: "legacy", scope: "all", keywords: [], text: "另一个答案", expires: Date.now()+3600000, cooldownMinutes: 30 }]; f.assistant.store.set("settings", s);
-  assert.equal((await f.incoming(f.event())).status, "topic-review"); assert.equal(f.sends.length, 0);
+  assert.equal((await f.incoming(f.event())).status, "sent"); assert.equal(f.sends.length, 1); assert.equal(f.sends[0].text, rule().text);
 });
 test("legacy automatic rules remain available for an explicit nonmatch in fallback mode", async (t) => {
   const f = await topicFixture(t, { classify: async () => none() }), s = f.assistant.store.get("settings");
@@ -75,25 +75,26 @@ test("semantic sends share global hourly quota and rule/conversation cooldown", 
 test("multiple matching IDs, unknown IDs, partial coverage and injected template fields are rejected", async (t) => {
   for (const result of [match("unknown"), { ...match(), ruleIds: ["pdf", "another"] }, { ...match(), coversWholeMessage: false }, { ...match(), text: "model supplied payload" }]) {
     const f = await topicFixture(t, { classify: async () => result }, { rules: [rule(), rule({ id: "another" })] });
-    assert.equal((await f.incoming(f.event())).status, "topic-review"); assert.equal(f.sends.length, 0);
+    assert.equal((await f.incoming(f.event())).status, "pending"); assert.equal(f.models.length, 1); assert.equal(f.sends.length, 0);
   }
 });
-test("classification failures stay editable even in topics-only mode", async (t) => {
+test("classification failures filter without a pending task in topics-only mode", async (t) => {
   const f = await topicFixture(t, { classify: async () => { throw new Error("secret backend detail"); } }, { mode: "only" });
-  const d = await f.incoming(f.event()); assert.equal(d.status, "topic-review"); assert.ok(!d.error.includes("secret"));
-  const card = await f.assistant.show("edit", { id: d.id }); await f.act(card, "edit-send", { body: "我核对后答复。" });
-  assert.equal(f.sends[0].text, "我核对后答复。");
+  const d = await f.incoming(f.event()); assert.equal(d.status, "filtered"); assert.ok(!JSON.stringify(d).includes("secret"));
+  assert.equal(f.sends.length, 0); assert.equal(f.models.length, 0);
+  assert.equal(f.assistant.store.get("topicHealth").state, "degraded");
 });
-test("disabling the last rule in topics-only mode cannot silently discard all incoming work", async (t) => {
+test("topics-only without enabled rules filters and explains the effect on the home page", async (t) => {
   const f = await topicFixture(t, {}, { mode: "only", rules: [rule({ enabled: false })] });
-  assert.equal((await f.incoming(f.event())).status, "topic-review"); assert.equal(f.classified.length, 0);
+  assert.equal((await f.incoming(f.event())).status, "filtered"); assert.equal(f.classified.length, 0);
+  await f.assistant.show(); assert.match(f.cards.at(-1).data.description, /所有来信都将被过滤/);
 });
 test("classification admission returns without waiting and changes during the model call cannot authorize a send", async (t) => {
   let release; const gate = new Promise((r) => { release = r; });
   const f = await topicFixture(t, { classify: () => gate }); const e = f.event();
   await f.admit(e); assert.equal(f.assistant.store.list()[0].status, "classifying");
   f.setTopics((x) => { x.enabled = false; }); release(match()); await f.assistant.idle();
-  assert.equal(f.assistant.store.list()[0].status, "topic-review"); assert.equal(f.sends.length, 0);
+  assert.equal(f.assistant.store.list()[0].status, "stale"); assert.equal(f.sends.length, 0);
 });
 test("new messages supersede old in-flight classification and duplicates never classify twice", async (t) => {
   let release, count = 0; const gate = new Promise((r) => { release = r; });
@@ -104,11 +105,20 @@ test("new messages supersede old in-flight classification and duplicates never c
   release(match()); await f.assistant.idle(); assert.equal(f.sends.length, 1); assert.equal(f.sends[0].event.message_id, e2.message_id);
   assert.equal(count, 2);
 });
-test("restarting interrupted classification produces a manual record and never retries automatic delivery", async (t) => {
+test("restart reports interruption without creating a third topic branch or retrying delivery", async (t) => {
   const f = await topicFixture(t, { classify: async () => review() }), d = await f.incoming(f.event());
   f.assistant.store.put({ ...d, status: "classifying" });
+  const legacy = await f.incoming(f.event());
+  f.assistant.store.put({ ...legacy, status: "topic-review" });
   const restored = new AssistantStore(f.config); await restored.open(f.dir);
-  assert.equal(restored.draft(d.id).status, "topic-review"); restored.close(); assert.equal(f.sends.length, 0);
+  assert.equal(restored.draft(d.id).status, "draft-error");
+  assert.equal(restored.draft(legacy.id).status, "topic-review", "already saved legacy records remain readable");
+  const { draftStatusLabel } = await import("../assistant-views.mjs");
+  assert.equal(draftStatusLabel(restored.draft(d.id)), "处理被中断");
+  restored.close(); assert.equal(f.sends.length, 0);
+  await f.act(await f.assistant.show("regenerate", { id: d.id }), "generate");
+  assert.equal(f.assistant.store.draft(d.id).errorCode, undefined);
+  assert.equal(f.assistant.store.draft(d.id).status, "pending"); assert.equal(f.sends.length, 0);
 });
 test("topic revision invalidates older approval versions; owner regeneration recovers without auto-send", async (t) => {
   const f = await topicFixture(t, {}, { rules: [rule({ action: "confirm" })] }), d = await f.incoming(f.event());

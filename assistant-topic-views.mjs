@@ -15,14 +15,14 @@ export function buildTopicView(name, state, args, view) {
   const describe = (r) => `${r.name} · ${r.enabled ? "启用" : "停用"}\n${scopeNames[r.scope]}${r.targets.length ? `：${targets(r)}` : ""}\n${TOPIC_ACTIONS[r.action]}`;
   if (name === "topics") {
     view.title = "消息主题";
-    view.description = `主题识别：${topics.enabled ? "已开启" : "已关闭"}\n未命中：${topics.mode === "only" ? "只关注指定主题，明确未命中不处理" : "其他消息照常处理"}\n主题规则：${topics.rules.length}条\n\n先检查监听来源，再判断主题。规则不扩大来源范围。\n不确定或识别失败交给本人，不自动发送。`;
+    view.description = `主题识别：${topics.enabled ? "已开启" : "已关闭"}\n未明确命中：${topics.mode === "only" ? "只关注指定主题，一律过滤" : "其他消息照常处理，沿用普通回复方式及有效自动授权"}\n主题规则：${topics.rules.length}条\n\n先检查监听来源，再判断主题。明确命中唯一主题才执行该规则；不确定、多个主题或识别异常均按上方设置处理。规则不扩大来源范围。${topics.enabled && topics.mode === "only" && !topics.rules.some((r) => r.enabled) ? "\n\n没有启用的主题：所有来信都将被过滤。" : ""}`;
     view.buttons = [button("主题开关与未命中策略", "topic-mode"), button("新增主题规则", "topic-new"),
       button("查看与管理规则", "topic-manage"), button("返回监听范围", "listen")];
   } else if (name === "topic-mode") {
     view.title = "主题开关与未命中策略";
-    view.description = "关闭主题识别会恢复原有回复流程，包括已授权的关键词自动答复。\n本页不改变监听总开关。只关注主题时，识别失败仍保留待判断。";
+    view.description = "明确命中唯一主题时执行该规则。\n未明确命中（含不确定、多个主题或识别异常）时：\n· 其他消息照常处理：按普通回复方式处理，包括范围与期限内的自动发送授权。\n· 只关注指定主题：一律过滤，不起草、不发送、不创建待办；可能过滤相关但无法明确匹配的消息，原因可在处理记录查看。\n关闭主题识别会恢复普通回复流程；本页不改变监听总开关。";
     view.fields = [select("enabled", "主题识别", [["on", "开启"], ["off", "关闭，恢复原有流程"]], topics.enabled ? "on" : "off"),
-      select("mode", "明确未命中主题时", [["fallback", "其他消息照常处理"], ["only", "只关注指定主题"]], topics.mode)];
+      select("mode", "未明确命中的消息", [["fallback", "其他消息照常处理"], ["only", "只关注指定主题"]], topics.mode)];
     view.buttons = [button("保存主题策略", "topic-save-mode"), back];
   } else if (name === "topic-manage") {
     const page = Math.max(0, Math.min(Number(args.page) || 0, Math.max(0, Math.ceil(topics.rules.length / 3) - 1)));

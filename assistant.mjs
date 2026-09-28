@@ -520,7 +520,7 @@ export function createAssistant(api, config, dependencies = {}) {
         if (s.topics.enabled && d.topicRevision === s.topics.revision && result.kind === "auto") rule = result.rule;
       } else rule = autoAnswer(d.event, d.reply, s, now());
       if (!rule || rule.id !== automaticRule.id || rule.text !== d.text) {
-        store.put({ ...d, status: "topic-review", text: "", error: "自动答复授权已变化或冲突；请本人判断。", updated: now() });
+        store.put({ ...d, status: "stale", error: "自动答复授权已变化；请核对设置后重新确认。", updated: now() });
         return;
       }
       const window = store.get("auto-rate") ?? { since: now(), count: 0 };
@@ -574,6 +574,7 @@ export function createAssistant(api, config, dependencies = {}) {
       topicRevision: settings().topics.revision,
       topic: manual && d.topic ? { ...d.topic, reasonLabel: "本人要求重新拟稿", decision: { outcome: "review", reason: "ambiguous" } } : d.topic,
       status: "generating",
+      errorCode: undefined,
       version: d.version + 1,
       updated: now(),
     });
@@ -633,27 +634,37 @@ export function createAssistant(api, config, dependencies = {}) {
     // Admission remains immediate. Bounded classification and model/network work run in background.
     const current = () => !closed && store.draft(d.id)?.version === d.version &&
       ["generating", "classifying"].includes(store.draft(d.id)?.status);
-    const valid = () => current() && listener.snapshot().enabled && listener.snapshot().revision === prefs.revision &&
+    const valid = () => current() && store.draft(d.id)?.expires > now() && listener.snapshot().enabled && listener.snapshot().revision === prefs.revision &&
       settings().topics.revision === s.topics.revision && !(settings().pauses[event.conversation_id] > now());
     const review = (reason) => {
-      d = store.put({ ...d, status: "topic-review", text: "", error: TOPIC_REASONS[reason] || TOPIC_REASONS.failed,
+      d = store.put({ ...d, status: reason === "changed" ? "stale" : "draft-error", text: "", error: TOPIC_REASONS[reason] || TOPIC_REASONS.failed,
         topic: { ...d.topic, reasonLabel: TOPIC_REASONS[reason] || TOPIC_REASONS.failed }, updated: now() });
     };
     track((async () => {
       if (s.topics.enabled) {
         const eligible = eligibleTopics(s.topics, event, reply);
+        const classificationStartedAt = now();
         const decision = eligible.length ? await classify(event.content, eligible, valid) :
-          { outcome: s.topics.mode === "only" && !s.topics.rules.some((r) => r.enabled) ? "review" : "none",
-            reason: s.topics.rules.some((r) => r.enabled) ? "none" : "no_rules", ruleIds: [] };
+          { outcome: "none", reason: s.topics.rules.some((r) => r.enabled) ? "none" : "no_rules", ruleIds: [], coversWholeMessage: false };
         if (!current()) return;
         if (!valid()) { review("changed"); notice(d); return; }
+        if (eligible.length) {
+          const health = store.get("topicHealth") ?? { affectedCount: 0 };
+          if (["failed", "invalid", "busy"].includes(decision.reason)) {
+            store.set("topicHealth", { ...health, state: "degraded", reason: decision.reason,
+              since: health.state === "degraded" ? health.since : classificationStartedAt,
+              lastFailureAt: now(), affectedCount: health.affectedCount + 1 });
+          } else if (!["too_long", "changed", "no_rules"].includes(decision.reason)) {
+            store.set("topicHealth", { ...health, state: "ready", lastSuccessAt: now() });
+          }
+        }
         const latestSettings = settings();
         const result = topicDisposition(decision, eligible, latestSettings, reply,
           matchingAutoRules(event, reply, latestSettings, now()), now());
         d = store.put({ ...d, topic: { decision, name: result.rule?.name,
-          reasonLabel: TOPIC_REASONS[result.reason || decision.reason], ruleId: result.rule?.id } });
-        if (result.kind === "review") { review(result.reason); notice(d); return; }
-        if (result.kind === "none" && s.topics.mode === "only") {
+          reasonLabel: TOPIC_REASONS[result.reason || decision.reason], reasonCode: result.reason || decision.reason,
+          branch: result.kind, startedAt: classificationStartedAt, finishedAt: now(), ruleId: result.rule?.id } });
+        if (result.kind === "filtered") {
           store.put({ ...d, status: "filtered", updated: now() }); return;
         }
         if (["auto", "confirm", "inbox"].includes(result.kind)) {

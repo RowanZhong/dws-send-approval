@@ -18,14 +18,14 @@ const select = (name, label, values, value) =>
   });
 const text = (name, label, value = "") => field(name, label, "TEXT_AREA", { defaultValue: value });
 const labels = {
-  generating: "正在拟稿",
+  generating: "正在起草",
   classifying: "正在识别主题",
-  "topic-review": "主题待本人判断",
-  filtered: "未匹配指定主题",
+  "topic-review": "旧记录待确认",
+  filtered: "已过滤",
   pending: "待确认",
   inbox: "仅整理",
   stale: "有新消息，需刷新",
-  "draft-error": "拟稿未完成",
+  "draft-error": "起草失败",
   sending: "发送中",
   sent: "已发送",
   unknown: "发送结果待核实",
@@ -34,6 +34,19 @@ const labels = {
   superseded: "已有更新草稿",
   suppressed: "频率限制，本次未发",
 };
+export function draftStatusLabel(d) {
+  return d.status === "draft-error" && d.errorCode === "PROCESS_INTERRUPTED" ? "处理被中断" : labels[d.status] || "待核实";
+}
+export function draftBodyLabel(d) {
+  if (d.text) return d.text;
+  if (d.status === "inbox") return "已整理，按设置不生成回复。";
+  if (d.status === "generating") return "正在生成回复，请稍候。";
+  if (d.status === "classifying") return "正在识别主题，随后按设置处理。";
+  if (d.status === "filtered") return "按“只关注指定主题”设置过滤，不生成回复。";
+  if (d.status === "draft-error") return "起草未成功，可重试起草或手动填写。";
+  if (["expired", "superseded", "ignored", "suppressed"].includes(d.status)) return "本条已结束处理。";
+  return "暂无回复正文，可查看状态后手动填写。";
+}
 export function draftLabel(d, directory = []) {
   const name = (kind, id, fallback) => {
     const display = directory.find((x) => x.kind === kind && x.id === id)?.name || fallback;
@@ -70,6 +83,13 @@ export function buildView(name, state, args = {}) {
       button("处理记录", "history"),
       button(prefs.enabled ? "暂停全部" : "开启监听", "toggle"),
     ];
+    if (settings.topics?.enabled && settings.topics.mode === "only" && !settings.topics.rules.some((r) => r.enabled)) {
+      view.description += "\n\n只关注指定主题，但没有启用规则：所有来信都将被过滤。";
+    }
+    const health = store.get?.("topicHealth");
+    if (settings.topics?.enabled && health?.state === "degraded") {
+      view.description += `\n\n主题识别异常：${health.reason === "busy" ? "暂时繁忙" : health.reason === "invalid" ? "结果无效" : "调用未完成"}。\n最近异常：${new Date(health.lastFailureAt).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone })}；累计影响 ${health.affectedCount} 条。\n消息已按未明确命中的设置处理，恢复后不会自动补发。`;
+    }
   } else if (name === "listen") {
     const describe = (key, kind) => {
       const rule = prefs.rules[key];
@@ -194,7 +214,7 @@ export function buildView(name, state, args = {}) {
       sent: "已发送", sending: "正在发送", unknown: "发送结果待核实",
       pending: "将以你的身份回复",
     }[d.status] ?? "回复草稿") + " · 完整正文";
-    view.description = `${labels[d.status] || d.status}\n${d.reply.direct ? "私聊回复" : "引用回复此条群消息"}\n原消息：${d.event.content.slice(0, 3000)}\n\n${bodyTitle}：\n${d.text || "尚未生成"}${d.error ? `\n${d.error}` : ""}${d.topic ? `\n\n消息主题：${d.topic.name || "未确定"} · ${d.topic.reasonLabel || "待核对"}` : ""}`;
+    view.description = `${draftStatusLabel(d)}\n${d.reply.direct ? "私聊回复" : "引用回复此条群消息"}\n原消息：${d.event.content.slice(0, 3000)}\n\n${bodyTitle}：\n${draftBodyLabel(d)}${d.error ? `\n${d.error}` : ""}${d.topic ? `\n\n消息主题：${d.topic.name || "未确定"} · ${d.topic.reasonLabel || "待核对"}` : ""}`;
     view.refs = [{ id: d.id, version: d.version }];
     if (name === "edit") {
       view.description = `接收对象与原消息不变。${d.reply.direct ? "" : "发送时引用此条群消息。"}修改后点击发送即发送输入框中的完整正文。\n原消息：${d.event.content.slice(0, 160)}`;
@@ -266,7 +286,7 @@ export function buildView(name, state, args = {}) {
       rows
         .map(
           (d) =>
-            `#${d.id} ${draftLabel(d, directory)} · ${labels[d.status]}\n原消息：${d.event.content.slice(0, 160)}\n拟回复：${d.text || "尚未生成"}`,
+            `#${d.id} ${draftLabel(d, directory)} · ${labels[d.status]}\n原消息：${d.event.content.slice(0, 160)}\n拟回复：${draftBodyLabel(d)}`,
         )
         .join("\n\n");
     view.refs = rows.map((d) => ({ id: d.id, version: d.version }));

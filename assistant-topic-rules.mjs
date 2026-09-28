@@ -2,10 +2,10 @@
 export const TOPIC_LIMIT = 20;
 export const TOPIC_ACTIONS = { auto: "自动发送固定说明", confirm: "模板由我确认", inbox: "只整理提醒" };
 export const TOPIC_REASONS = {
-  matched: "主题明确匹配", none: "未匹配指定主题", ambiguous: "主题不明确，需本人判断",
+  matched: "主题明确匹配", none: "未明确命中指定主题", ambiguous: "无法明确命中唯一主题",
   partial: "包含其他问题，模板不能完整回应", excluded: "属于主题排除情形",
-  conflict: "匹配规则冲突，需本人判断", invalid: "识别结果无效，未自动发送",
-  failed: "主题识别未完成，可修改或重新拟稿", busy: "主题识别队列繁忙，转本人处理",
+  conflict: "多个主题可能匹配", invalid: "主题识别返回无效结果",
+  failed: "主题识别未完成", busy: "主题识别暂时繁忙",
   changed: "主题设置已变化，请重新拟稿或修改规则", no_rules: "没有启用的主题，请核对设置",
   too_long: "消息过长，未自动判类", expired: "自动答复授权已到期，请本人确认",
 };
@@ -53,7 +53,7 @@ export function normalizeTopicDecision(value, rules) {
     return { outcome: "review", reason: "invalid", ruleIds: [], coversWholeMessage: false };
   if (value.outcome === "match") {
     if (value.ruleIds.length !== 1) return { outcome: "review", reason: "conflict", ruleIds: [], coversWholeMessage: false };
-    if (!value.coversWholeMessage || value.reason !== "matched")
+    if ((!value.coversWholeMessage && rules.find((r) => r.id === value.ruleIds[0])?.action !== "inbox") || value.reason !== "matched")
       return { outcome: "review", reason: "partial", ruleIds: [], coversWholeMessage: false };
     return { outcome: "match", reason: "matched", ruleIds: value.ruleIds, coversWholeMessage: true };
   }
@@ -62,12 +62,12 @@ export function normalizeTopicDecision(value, rules) {
   return { outcome: "review", reason: value.outcome === "review" ? value.reason : "invalid", ruleIds: [], coversWholeMessage: false };
 }
 export function topicDisposition(decision, rules, settings, reply, keywordMatches, now) {
-  if (decision.outcome !== "match") return { kind: decision.outcome, reason: decision.reason };
+  const fallback = (reason) => ({ kind: settings.topics.mode === "only" ? "filtered" : "fallback", reason });
+  if (decision.outcome !== "match" || decision.ruleIds?.length !== 1) return fallback(decision.reason);
   const rule = rules.find((r) => r.id === decision.ruleIds[0]);
-  if (!rule) return { kind: "review", reason: "changed" };
+  if (!rule) return fallback("changed");
   if (reply.mode === "inbox" || rule.action === "inbox") return { kind: "inbox", rule };
   if (rule.action === "confirm") return { kind: "confirm", rule };
-  if (keywordMatches.some((r) => r.text !== rule.text)) return { kind: "review", reason: "conflict" };
   return { kind: rule.expires > now ? "auto" : "confirm", rule,
     reason: rule.expires > now ? "matched" : "expired" };
 }
