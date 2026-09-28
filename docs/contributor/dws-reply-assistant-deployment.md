@@ -8,7 +8,7 @@
 
 这套方案为每名员工的独立 OpenClaw 实例增加一条**受控的个人消息处理流程** ：DWS 用员工已登录的身份接收消息，自定义插件按员工设置筛选来源、识别消息主题、生成草稿并管理授权，社区钉钉插件负责投递卡片和接收本人操作。员工可以确认后发送，也可以提前授权有范围、有期限的固定答复。平台统一部署代码和配置模板，员工自己的身份、监听偏好与状态保留在各自 Pod 的持久化目录中。
 
-核心做法是**把来信内容与可执行权限分开** 。当前默认的助手模式不会把陌生人的消息交给有工具权限的主 Agent，而是调用宿主的无工具文本生成接口起草回复。拟稿输入限定为本条来信、同一会话的有限上下文、写作要求和本人为本条补充的资料。模型生成的文字不能直接执行命令或更换接收人；只有插件中的发送器能把经过授权的完整正文发回绑定的来源会话。
+核心做法是**把来信内容与可执行权限分开** 。当前默认的助手模式调用宿主的无工具文本生成接口起草回复；显式开启工具时，使用经过权限核验的专用只读 Agent。拟稿输入限定为本条或当前批次来信、同一会话的有限上下文、写作要求和本人为本条补充的资料；专用 Agent 还可查询允许范围内的资料。模型生成的文字不能直接执行命令或更换接收人；只有插件中的发送器能把经过授权的完整正文发回绑定的来源会话。
 
 ### 一条消息如何走到发送
 
@@ -26,7 +26,7 @@
 | 实际来源与动作 | 插件处理 | 对正常使用的影响 |
 | --- | --- | --- |
 | 本人在钉钉或 Web 主会话请求发消息；宿主提供正常会话键 | 来源判为 ordinary，钩子直接返回 | 不额外增加本插件审批；仍受 OpenClaw 原有权限约束 |
-| DWS 事件进入默认助手模式 | 范围过滤 → 可选主题判类 → 无工具拟稿/固定正文 → 本人确认或精确预授权 → 固定发送器 | 仅处理员工选择的消息范围 |
+| DWS 事件进入助手模式 | 范围过滤 → 可选主题判类 → 无工具/受限 Agent 拟稿或固定正文 → 本人确认或固定正文预授权 → 固定发送器 | 仅处理员工选择的消息范围；AI 正文始终由本人确认 |
 | 已登记的旧监听专用会话调用 `dws chat message send` 或 `dws chat +messages-send` | 按 block / approval 配置阻断或要求单次审批；有无 `--yes` 都检查 | 同一条发信命令在监听来源中受控，不因此限制已识别的普通主会话 |
 | 会话键缺失，或使用监听标记但登记、profile、agentId 无法核实 | 对匹配的 DWS 发送拒绝执行；跨会话转交/延迟任务也拒绝 | 保守拒绝来源不明的操作，应修复上下文传递，不能假装来源可信 |
 
@@ -39,13 +39,14 @@
 ```text
 DWS 认证事件 → 范围过滤、业务消息去重 → 持久化草稿/收件箱
                                       ├─ 已授权固定正文 → 确定性发送器
-                                      └─ 无工具拟稿 → 本人卡片确认 → 确定性发送器
-钉钉社区插件 ← 同进程桥接 → 自定义助手插件 ← SQLite + 个人偏好
+                                      └─ 无工具 / 专用只读 Agent 拟稿
+                                           → 本人卡片确认 → 确定性发送器
+钉钉社区插件 ← 通用接口 / 旧版桥接 → 独立助手插件 ← SQLite + 个人偏好
 ```
 
 - **社区插件** 只新增卡片投递与 Stream 回调适配层。通过已有 Stream 连接传递回调的用户 ID、账号、卡片 ID，不从消息正文或表单字段推断身份。没有新增 HTTP 端口或第二条社区插件 Stream 连接。
 - **独立助手插件** 负责个人偏好、监听、草稿、自动授权、通知和发送。从 0.8.0 起只维护一个项目、一个安装包；新版通过通用卡片接口接入，旧版通过既有桥接接入。业务逻辑无需同步到两个社区仓库。
-- **无工具拟稿** 使用宿主 `runtime.llm.complete`，只传写作要求、当前来信、默认最近 5 分钟同会话的可用对话文字（过滤可识别媒体，不读附件），最多 50 条、12000 字符及本条本人提供的资料；默认不启动 Agent；显式开启受限工具时按专用 Agent 策略运行，配置步骤见[第 3 节专用 Agent 部署](#draft-agent-setup)。不同会话上下文不混合，历史未发送草稿不作为已发事实。
+- **AI 拟稿** 默认使用宿主 `runtime.llm.complete`，传入写作要求、当前来信或私聊批次（完整正文合计最多 8000 字符）、默认最近 5 分钟同会话的可用对话文字（最多 50 条、12000 字符；过滤可识别媒体，不读附件）及本条本人提供的资料。默认不启动 Agent；显式开启受限工具时按专用 Agent 策略运行，配置步骤见[第 3 节专用 Agent 部署](#draft-agent-setup)。不同会话上下文不混合，历史未发送草稿不作为已发事实。
 - **确认校验** 绑定本人 staffId、社区账号、outTrackId、一次性按钮令牌、到期时间和草稿版本。接收会话只能来自可信 DWS 事件，表单不能更换接收人、DWS profile 或执行命令。本人以外点击、转发卡、旧版本、重复点击都会被拒绝。
 - **发送器** 用固定可执行路径、绑定 profile 和 argv（`shell:false`）发送。私聊使用 `chat +messages-send --as user`；群消息使用 `chat +messages-reply`，绑定监听事件的 `--conversation-id`、`--message-id`、`--ref-sender`，并按已审阅正文生成稳定幂等键。人工发送、编辑后发送和固定自动回复共用该发送器。引用失败不回退普通群消息；无本地来源信息时保留待处理，网络或结果不明确时标为 unknown，禁止自动重发。`--yes` 只由授权后的代码添加。DWS 1.0.58 的 `im.message-reply.v1` 回执与普通发送格式不同，必须分别校验；引用回复不等同于独立话题写入。
 - **重启恢复** 先把 sending 状态写入数据库，再发出请求。发送成功才记 sent；超时、断线或进程中断记 unknown，不自动重试，避免重复发信。卡片和草稿可恢复；结果不明时需本人核对钉钉实际记录。
@@ -75,9 +76,9 @@ DWS 认证事件 → 范围过滤、业务消息去重 → 持久化草稿/收�
 旧的 `before_tool_call` 来源保护仍保留：对已登记的监听专用会话执行发送控制，对来源缺失或疑似监听但无法核实的会话保守拒绝；匹配的命令为 `dws chat message send` 与 `dws chat +messages-send`。旧兼容执行路径明确指定 `lane: dws-send-approval`。`assistant.enabled:false` 才回到旧方案；旧方案的两命令拦截不能覆盖任意脚本、HTTP 或其他外发工具，不能当作整个主 Agent 的数据隔离沙箱。
 
 
-### 消息主题与固定说明（0.7.0）
+### 消息主题与固定说明
 
-新增“监听范围 → 消息主题”，是来源之后的筛选层。现有私聊、群 @本人、额外发送者三组取并集不变；主题不能把未获来源授权的消息纳入。默认关闭，员工卡片设置保存在 PVC 上既有 SQLite 的 settings 中，不改 `openclaw.json`，不增加环境变量、必填字段或 DWS 常驻进程。
+“监听范围 → 消息主题”是来源之后的筛选层。私聊、群 @本人、额外发送者三组取并集；主题不能把未获来源授权的消息纳入。默认关闭，员工卡片设置保存在 PVC 上既有 SQLite 的 settings 中，不改 `openclaw.json`，不增加环境变量、必填字段或 DWS 常驻进程。
 
 ```text
 可信来源与员工开关 → 回复/暂停规则 → 适用主题 → 无工具判类
@@ -90,11 +91,11 @@ DWS 认证事件 → 范围过滤、业务消息去重 → 持久化草稿/收�
 
 调用 `api.runtime.llm.complete`，沿用 0.6.1 的默认 Agent 解析，不启动 Agent 会话或占用 main lane。每实例判类并发 1，最多 32 个运行/排队请求，排队上限 30 秒、单次调用超时 15 秒，不自动重试。提供方忽略取消时，旧调用结束前不再启动新判类，后续按未明确命中策略处理。每条适用消息最多一次判类，明确未命中且沿用 AI 回复模式时可能再调用一次拟稿；模拟试判也占模型请求。主题关闭或该来源没有适用主题时不调用判类模型。Gateway 启动和关闭监听均不新增模型请求。
 
-settings 仍为 version 1，新增可选 `topics:{enabled,mode,revision,rules}`，读旧状态时填默认值，既有偏好不变。规则保存、停用、删除及主题模式变更递增独立 revision；仅修改提醒不会使判类失效。来源偏好与主题版本在模型返回后和发送前双重检查，设置中途变化不能继续自动发送。重启将 classifying 恢复为 topic-review，将 sending 恢复为 unknown；不自动重试发送。filtered 记录使用可配置终态保留策略（默认 7 天）。私聊按同一发送者批次合并；群消息仅替代同一会话同一发送者的旧待办。
+settings 仍为 version 1，可选 `topics:{enabled,mode,revision,rules}` 在读旧状态时填默认值，既有偏好不变。规则保存、停用、删除及主题模式变更递增独立 revision；仅修改提醒不会使判类失效。来源偏好与主题版本在模型返回后和发送前双重检查，设置中途变化不能继续自动发送。重启将 `classifying/generating` 恢复为 `draft-error` 并标记 `PROCESS_INTERRUPTED`，卡片显示“处理被中断”；已存在的旧 `topic-review` 记录仍可查看，不再为新判类结果生成第三态待判断记录。`sending` 恢复为 `unknown`，不自动重试发送。`filtered` 记录使用可配置终态保留策略（默认 7 天）。私聊按同一发送者批次合并；群消息仅替代同一会话同一发送者的旧待办。
 
-主题动作支持自动固定模板、模板待确认、只整理。自动授权最长 7 天，到期仍匹配但转模板待确认；同一规则同一会话冷却最少 5 分钟，与既有关键词自动规则共享每小时 30 条上限。明确命中主题时以主题规则为准；普通回复分支中的固定规则冲突转人工。“不处理”、暂停、只整理优先。群内发送沿用已验证的原消息引用发送路径。
+主题动作支持自动固定模板、模板待确认、只整理。自动授权最长 7 天，到期仍匹配但转模板待确认；卡片提供的同一规则同一会话冷却最少 5 分钟，与普通自动规则共享每小时 30 条上限。明确命中主题时以主题规则为准；普通固定规则的正文冲突转为仅整理、由本人填写或起草，同正文但发送方式冲突转为待确认。“不处理”、暂停、只整理优先。群内发送沿用原消息引用发送路径。
 
-卡片复用既有动态 `form.fields`、6 个按钮和有效期备注；每页不超过 4 个字段，六步向导最终确认读取服务端保存的摘要。自动授权必须至少完成一条正向试判；试判页面不发送、不扩大来源，不续期已有规则。0.7.0 新增主题时无需更新模板；本次独立项目的 Channel 接口选择与安装要求以第 3 节为准。
+主题配置复用动态 `form.fields`、最多 6 个按钮和有效期备注；每页不超过 4 个字段，六步向导最终确认读取服务端保存的摘要。自动授权必须至少完成一条正向试判；试判页面不发送、不扩大来源，不续期已有规则。富文本正文采用 v3 配套模板，Channel 接口、模板选择与安装要求以第 3 节为准。
 
 
 ## 3. 管理员安装、升级和卡片模板
@@ -154,7 +155,7 @@ openclaw plugins install ./artifacts/dws-send-approval-0.9.0.tgz
 4. 保留同一 `stateDir`。`dws-send-approval/assistant.sqlite`、偏好、身份缓存和来源记录继续使用，不需要导出再导入。
 5. 重启后确认 `openclaw channels status --probe --json` 为运行且已连接；本人发送 `/dws identity`、`/dws-listen status`、`/dws` 核对身份、偏好和卡片。
 
-若卡片从旧桥接切换到通用接口，旧操作卡会在服务端停用，历史消息中的卡片可能仍然可见；请重新 `/dws` 打开新卡。未处理草稿、员工配置和发送历史保留；待办可以通过新卡或文字命令继续处理。已经成功发送和状态不明的消息不会因迁移自动重发。同一接口内重启仍保留有效卡片及通知去重。
+若卡片从旧桥接切换到通用接口，旧操作卡会在服务端停用，历史消息中的卡片可能仍然可见；请重新 `/dws` 打开新卡。仅切换卡片接口或模板时，未处理草稿、员工配置和发送历史保留；待办可以通过新卡或文字命令继续处理。已经成功发送和状态不明的消息不会因迁移自动重发。同一接口内重启仍保留有效卡片及通知去重。若同时切换 DWS 授权应用，还需执行[公司授权迁移](#company-app-migration)，旧未完成草稿转只读、原自动授权暂停，不能套用仅换模板的恢复方式。
 
 新版已安装原定制 Channel 时，独立助手仍可使用其旧桥接，便于先迁移助手再迁移 Channel。只要通用接口已经提供，就优先采用该接口；连接暂断或请求失败时不会偷偷改用旧桥接重试。
 
@@ -168,7 +169,7 @@ openclaw plugins install ./artifacts/dws-send-approval-0.9.0.tgz
 
 启用新版分区富文本时，导入 `templates/dws-reply-assistant-card-v3.platform-export.json`，在本企业完成预览、发布与真实回调验证后，将同一个 `assistant.cardTemplateId` 配置项改为新模板，并设置 `assistant.cards.presentationVersion: 3`。`dws-reply-assistant-card-v3.json` 是可重新生成的搭建源，示例富文本预览数据与运行时 Markdown 字符串分别保存；不得只看示例预览就判断运行时可用。
 
-切换展示版本会停用原卡片的业务操作，并提供升级说明及有效期内的“打开新版助手”入口。已保存设置、规则、授权期限和草稿保留；到期入口引导重新发送 `/dws`。仅重启且模板未变时，有效卡继续可用。不需要在配置中同时维护两套模板 ID；已有卡片保留自身模板信息用于停用提示。
+切换到展示版本 3 会停用原卡片的业务操作，并提供升级说明及有效期内的“打开新版助手”入口。仅切换模板时，已保存设置、规则、授权期限和草稿保留；到期入口引导重新发送 `/dws`。仅重启且模板未变时，有效卡继续可用。不需要在配置中同时维护两套模板 ID；已有卡片保留自身模板信息用于停用提示。公司授权迁移停用的旧卡不提供此恢复按钮，统一指引重新发送 `/dws`。
 
 社区机器人仍需具备卡片 API 权限，回调继续使用已有 STREAM 连接。审批卡在本人与机器人私聊中，群消息的个人回复仍由 DWS 引用原消息发送。本项目不新增机器人连接或 HTTP 服务。
 
@@ -430,8 +431,13 @@ openclaw config file
 | 审批机器人的开放 ID | 0.6.0 自动查找；不再配置 APPROVAL_BOT_OPEN_DINGTALK_ID 或 OC_APPROVAL_BOT_OPEN_ID。它是社区机器人在个人 IM 事件里的 sender_open_dingtalk_id，不是 clientId/robotCode，也不是主人的 UserId |
 | assistant.cardTemplateId / OC_DWS_ASSISTANT_CARD_TEMPLATE_ID | 本应用可使用的已发布代回复助手卡片模板 ID；保留原值可继续使用 v2，启用新版富文本排版时按第3节“卡片模板与必要权限”发布并切换到 v3 模板 |
 | agentId | 模型配置来源，通常 `main`，与 DWS 账号选择无关 |
+| identityPolicy.requiredDwsClientId | 公司统一指定的 DWS OAuth 应用 ID；没有公司策略时不填，与社区机器人 clientId 无关 |
+| identityPolicy.allowExistingBindingMigration | 默认 `false`；公司切换期间改为 `true`，完成后关闭，保留目标应用 ID |
+| assistant.cards / storage / context / directBatch / drafting | 下方单实例示例列出常用默认值；完整范围见[只读起草能力、参数与部署限制](read-only-drafting.md)，这些参数不会覆盖员工已保存的回复偏好 |
 
 ### 自动发现如何执行
+
+以下自动发现和缓存说明描述未配置公司授权策略时的行为。启用 `identityPolicy.requiredDwsClientId` 后，还会执行[公司授权策略的核验与迁移](#company-app-migration)，包括认证检查、消息接入与发送前的 profile 检查，以及最长 120 秒的迁移初始化预算。
 
 启动服务入口只安排后台工作，立即返回。后台先读取当前 profile、校验员工，再读取绑定缓存与个人设置。监听关闭时只做本地 profile 查询；不查询本人开放 ID 或机器人、不建立 IM 订阅。员工已保存“开启”时，或者本人主动启用监听时，本人及机器人身份就绪后才创建消费进程。
 
@@ -561,8 +567,11 @@ DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可
 
 ### 单实例配置
 
-下面文件是合并片段，保留原有 channels、agents、Web 权限及其他插件配置。`approvals.plugin` 用于兼容旧审批；不要覆盖其他插件现有的审批目标。
+下面示例与包内 [`config.example.json`](../../config.example.json) 一致，适用于 **0.9.0 和两版宿主**，显式列出常用参数及默认值。它是合并到现有 `openclaw.json` 的片段，不能替代整份宿主配置：保留已有 `channels`、`agents`、模型与凭据、Web 权限、其他插件及加载路径；使用 `plugins.allow` 时追加本插件 ID。`approvals.plugin` 用于兼容旧审批，保留其他插件现有审批配置，不直接用示例数组覆盖原数组。
 
+替换本人 `OWNER_STAFF_ID`、实际 DWS 绝对路径、已发布模板 ID，并将 `main`、`default` 改为实例实际的无工具拟稿 Agent 和钉钉账号。**该基础示例默认不启用公司授权限制、不开放工具、沿用展示版本 2；公司的本次统一应用切换还必须合并下方 `identityPolicy`，使用新版富文本模板还须把展示版本改为 3。**
+
+<!-- single-instance-config:config.example.json -->
 ```json
 {
   "commands": {
@@ -597,6 +606,9 @@ DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可
           "dwsPath": "/absolute/path/to/dws",
           "mode": "approval",
           "timeoutMs": 120000,
+          "identityPolicy": {
+            "allowExistingBindingMigration": false
+          },
           "listener": {
             "enabled": false
           },
@@ -604,7 +616,28 @@ DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可
             "enabled": true,
             "cardTemplateId": "PUBLISHED_ASSISTANT_CARD_TEMPLATE_ID",
             "draftTtlMinutes": 1440,
-            "cardTtlMinutes": 30
+            "cardTtlMinutes": 30,
+            "cards": {
+              "expiryCheckSeconds": 10,
+              "presentationVersion": 2
+            },
+            "storage": {
+              "retentionDays": 7,
+              "expiredCardRetentionHours": 24,
+              "cleanupIntervalSeconds": 300,
+              "dedupeRetentionDays": 30
+            },
+            "context": {
+              "historyMinutes": 5
+            },
+            "directBatch": {
+              "mergeGapSeconds": 30
+            },
+            "drafting": {
+              "toolsEnabled": false,
+              "timeoutSeconds": 120,
+              "documentWorkspaceIds": []
+            }
           }
         }
       }
@@ -617,6 +650,33 @@ DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可
 
 `mode:block` 是平台层禁止代发送；不等于停止监听。员工开关及选项存放在独立状态文件中，已有偏好优先于初始模板。
 
+#### 公司本次切换：必须补充目标应用与迁移开关
+
+将以下两项合并到同一 `plugins.entries["dws-send-approval"].config.identityPolicy`，覆盖基础示例中的 `false`。`requiredDwsClientId` 必须替换为公司指定的 DWS 应用 ID，不能填机器人应用 ID，也不要在助手配置内加入 client-secret。
+
+<!-- company-policy-config -->
+```json
+{
+  "requiredDwsClientId": "COMPANY_DWS_CLIENT_ID",
+  "allowExistingBindingMigration": true
+}
+```
+
+只装新包或只照抄基础示例不会启用迁移；只填目标 ID 而保留 `false`，也不会迁移已有旧应用绑定。已保存的身份和业务状态应原样保留，全员迁移完成后关闭迁移开关并长期保留目标 ID。新实例没有旧数据时不需要迁移授权，但仍必须使用目标应用登录。不同登录状态的提示与处理见[公司授权应用切换](#company-app-migration)。
+
+#### 按实际能力选择模板和 Agent
+
+| 场景 | 配置方式 |
+| --- | --- |
+| 保留既有展示版本 2 模板 | 保留原 `cardTemplateId` 和 `cards.presentationVersion:2` |
+| 使用本版分区富文本 | 先发布并验证 v3 模板，将 `cardTemplateId` 设为其完整 `.schema` ID，同时改为 `cards.presentationVersion:3`；不能只改其中一项 |
+| 默认无工具起草 | 保持 `drafting.toolsEnabled:false`；最近 5 分钟对话上下文仍生效 |
+| 开启只读工具起草 | 按[两版专用 Agent 配置步骤](#draft-agent-setup)新增并核验 Agent，再显式填写 `drafting.agentId`、开启工具；不能只把开关改成 `true` |
+
+基础示例省略 `profile` 和自动发现的机器人开放 ID；`listener.kind/target` 属于兼容的初始来源配置，普通助手通过卡片保存范围，无须手填。`listener.ignoreSenderOpenIds` 仅在需要额外排除对象时配置。未填 `drafting.agentId` 时继承顶层 `agentId`，不代表该主 Agent 可直接用于受限工具起草；`documentWorkspaceIds:[]` 表示不开放知识库检索。配置范围与上限见[参数说明](read-only-drafting.md)。
+
+合并后先执行 `openclaw config validate --json`，再按安装步骤重启并核对 `/dws identity`、`/dws` 的真实状态和卡片。配置格式有效不代表 DWS 授权、模型、模板权限或真实回调已经验证通过。
+
 ## 5. 15000 个 Pod 的统一部署
 
 同一镜像、同一 ConfigMap 模板。profile 和机器人开放 ID 已由插件自动发现；剩余身份和模板由开户平台提供：
@@ -625,14 +685,29 @@ DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可
 | --- | --- |
 | OC_OWNER_STAFF_ID | 是；与本 Pod 员工绑定 |
 | OC_DWS_ASSISTANT_CARD_TEMPLATE_ID | 按应用授权范围共享或分别配置 |
+| OC_DWS_REQUIRED_CLIENT_ID | 仅启用公司策略时需要；全公司统一，不因员工不同 |
 
 直接使用包内 `config.kubernetes.example.json`，宿主支持字符串中的 `${ENV_NAME}` 替换。环境变量缺失应由部署校验发现，不能把另一个员工的默认身份补给当前实例。DWS OAuth 登录态由每个员工独立授权并保存；复制 profile 名不能复制出有效授权。
+
+该文件与单实例基础示例采用相同默认值，仍不自动启用公司策略或 v3 展示。公司本次部署需在 ConfigMap 的助手配置中合并下列对象，并通过环境变量提供公司统一应用 ID；没有启用公司策略的部署无需设置这个环境变量。迁移完成后将布尔值改为 `false`，不要把布尔值写成字符串。
+
+<!-- company-kubernetes-policy-config -->
+```json
+{
+  "identityPolicy": {
+    "requiredDwsClientId": "${OC_DWS_REQUIRED_CLIENT_ID}",
+    "allowExistingBindingMigration": true
+  }
+}
+```
+
+使用 v3 模板时，同步在 ConfigMap 中设置 `assistant.cards.presentationVersion:3`，并将 `OC_DWS_ASSISTANT_CARD_TEMPLATE_ID` 设为已发布验证的 v3 模板 ID；两项必须配套。
 
 OpenClaw 状态目录和 DWS 配置目录挂载员工独立的持久卷。不要让两个运行中的 Pod 共用同一员工状态卷、profile 和监听；更新策略确保同一员工只有一个活动实例。共享 ConfigMap 只负责初始默认值，不写回员工设置。
 
 自动身份缓存为同目录的 `identity.json`；员工的规则在 `<service stateDir>/dws-send-approval/preferences.json`；草稿、按钮令牌、自动授权、冷却和记录在 `assistant.sqlite`（含运行时 WAL）；旧来源保护在 `sources.json`。目录 0700、数据库 0600。备份/迁移应暂停服务并完整保留状态，或使用 SQLite 一致性备份；不要只复制活跃数据库而遗漏 WAL。
 
-首次默认关闭。员工主动开启后，Pod 重建从个人持久卷恢复其选择；这与“新员工默认不开启”并不冲突。自动授权到期自动失效；卡片默认有效 **30 分钟** ，`assistant.cardTtlMinutes` 可设 1–1440 分钟；绝对到期，翻页、修改及保存都不延长。每次新发 `/dws` 会停用旧卡。草稿默认 24 小时，`draftTtlMinutes` 可设 10–10080 分钟，两者互不替代。最多 200 条待处理；到期扫描不受旧版 1000 张活跃卡上限影响。终态正文默认保留 7 天，已刷失效的过期卡默认再保留 24 小时；发送中、结果未知和未结束 Agent 任务受保护。后台默认每 10 秒做轻量到期巡检，每轮公平回写最多 10 张失效卡；失败按原卡、原后端退避重试。重型清理默认每 300 秒运行，分批删除及被动 WAL checkpoint；删除正文后留下默认 30 天去重指纹。长时间不可投递的卡在 7 天后仅保留权限墓碑。服务端按绝对时间拒绝过期回调，不依赖前端刷新。升级前已被清理的历史记录无法回写卡面，但点击同样被拒绝。
+首次默认关闭。员工主动开启后，Pod 重建从个人持久卷恢复其选择；这与“新员工默认不开启”并不冲突。自动授权到期自动失效；卡片默认有效 **30 分钟** ，`assistant.cardTtlMinutes` 可设 1–1440 分钟；绝对到期，翻页、修改及保存都不延长。每次新发 `/dws` 会停用同类手动操作卡，独立通知卡仍按自身期限与状态处理。草稿默认 24 小时，`draftTtlMinutes` 可设 10–10080 分钟，两者互不替代。待处理达到 200 条后阻止新会话接入，已有会话可继续更新，不是严格总量上限；到期扫描不受旧版 1000 张活跃卡上限影响。终态正文默认保留 7 天，已刷失效的过期卡默认再保留 24 小时；发送中、结果未知和未结束 Agent 任务受保护。后台默认每 10 秒做轻量到期巡检，每轮公平回写最多 10 张失效卡；失败按原卡、原后端退避重试。重型清理默认每 300 秒运行，分批删除及被动 WAL checkpoint；删除正文后留下默认 30 天去重指纹。长时间不可投递的卡在 7 天后仅保留权限墓碑。服务端按绝对时间拒绝过期回调，不依赖前端刷新。升级前已被清理的历史记录无法回写卡面，但点击同样被拒绝。
 
 身份发现仅顺序启动短生命周期 CLI，同一解析过程最多一个查询子进程，不增加常驻身份查询进程。全部私聊 + 所有群 @本人可合并为一个 DWS consume 进程；指定人员可能按唯一目标增加消费进程，最多 41 个（两个各 20 人列表并集 + 一个广泛订阅）。DWS 自身的事件总线进程、连接、认证与平台订阅配额也要纳入集群预算。群范围过滤在本地，不会为每个群额外创建一个消费进程。
 
@@ -653,6 +728,16 @@ OpenClaw 状态目录和 DWS 配置目录挂载员工独立的持久卷。不要
 0.9.0 包含此前功能与身份修复（代码基线 `6662d54`）及公司统一授权应用迁移（代码基线 `db9ab97`），两轮均已完成各自的双版必要真机验收。专用 Agent 的两版完整配置、路由、启用验证和排错见[第 3 节](#draft-agent-setup)；参数、模板迁移及接口限制见[只读起草能力与限制](read-only-drafting.md)。完整证据与未覆盖范围见 [2026-09-28 执行记录](../plans/2026-09-28-development-record.md)、[身份修复记录](../plans/2026-09-28-identity-recovery.md)及[公司授权迁移记录](../plans/2026-09-29-company-app-migration.md)。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。部署应记录 `0.9.0` 和实际 Git 提交，并从对应源码打包；版本号不能代替提交标识或企业灰度验收。
 
 ## 7. 验证、性能与交付状态
+
+### 0.9.0 验收范围总览
+
+0.9.0 汇总 2026-09-28 的功能优化与 2026-09-29 的公司授权迁移。两版实际宿主 SDK 校验与必要真机验收已完成；版本打包时全量 414 项测试通过。两轮使用的夹具、真人来信、真实模型和真实卡片回调分别记录，不将配置格式校验等同于业务真机验证。
+
+- **2026-09-28：** 两版覆盖普通/主题分流、固定确认与自动授权、连续私聊、私聊/群上下文、只读 Agent、卡片到期与故障恢复、存储保护和批量确认。iPhone 说明页、多行正文及最新回复详情的深色/大字体由用户确认正常，不代表所有手机页面均已穷举。
+- **2026-09-29：** 两版公司授权提示、自动迁移、中断恢复与旧草稿只读，详见下节；目标是本机既有授权，旧绑定为合成夹具。
+- **仍需公司灰度：** 公司真实新应用权限、生产 Linux/PVC 环境、限流及 15000 Pod 容量。本版没有增加可靠的服务号自动识别过滤。
+
+下方 0.8.0、0.7.0、0.6.x、0.5.x 及第 8 节的早期记录保留各轮当时状态；其中“未测手机”“旧待判断分支”等描述不代表当前版本整体状态。当前操作行为以第 1–6 节及员工手册为准，详细证据见[功能验收记录](../plans/2026-09-28-development-record.md)与[公司迁移记录](../plans/2026-09-29-company-app-migration.md)。
 
 ### 公司统一授权应用迁移（2026-09-29）
 
@@ -760,13 +845,17 @@ node --expose-gc scripts/bench-assistant.mjs /tmp/assistant-benchmark.json
 
 | 模板部分 | 数据/协议 | 服务端职责 |
 | --- | --- | --- |
-| CardHeaderV2 / BaseText | title、description | 展示对象和完整草稿正文 |
+| CardHeaderV2 / v2 BaseText | title、description | 标题共用；展示版本 2 用分段文字显示对象、正文与说明 |
+| v3 MarkdownBlock 正文分区 | content_status、content_summary、content_body、content_notice | 分别展示状态、摘要、分节正文和提示；对外来文字做字面转义并按段落保留换行，不更改原草稿正文 |
+| 有效期备注 | card_expires_note | 显示卡片绝对到期时间，与草稿和授权有效期分开 |
 | Form | form.fields（输入、多行输入、单选、多选） | 验证字段与允许的操作 |
 | 六个 SingleButton | button1…6、action1…6 | 保存一次性令牌与按钮索引绑定 |
 | 可见性表达式 | card_status、show_button_1…6 | 隐藏空按钮，过期后禁用 |
 | Stream request 事件 | cardPrivateData.actionIds、params.form | 从顶层 userId/outTrackId 校验真实操作者 |
 
 钉钉官方提供[模板导入示例](https://github.com/open-dingtalk/dingtalk-card-examples)、[事件链能力](https://open.dingtalk.com/document/dingstart/using-event-chains-for-card-interaction)与[卡片回调示例](https://opensource.dingtalk.com/developerpedia/docs/explore/tutorials/stream/bot/go/card-callback/)。这些文档证明能力存在，不能替代本模板在目标租户的实际验收。
+
+展示版本 2 使用重新分段的 `description`；版本 3 使用四个富文本变量。动态表单与回调协议共用，配置只维护一个当前模板 ID。下列早期页面记录描述当时模板；启用 v3 必须按第 3 节发布配套模板，不能把历史“无需重新发布模板”理解为旧模板会自动获得富文本组件。
 
 模板发布流程：新建专用模板 → 导入 JSON → 编译/预览 → 发布 → 取得模板 ID → 确认机器人可使用 → 配置并构建插件 → 重启 Gateway → 确认 Stream 已连接 → 本人私聊 `/dws` → 操作按钮并检查真实回调。不要覆盖既有问卷模板。
 

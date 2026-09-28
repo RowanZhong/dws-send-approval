@@ -31,6 +31,9 @@
           "dwsPath": "/absolute/path/to/dws",
           "mode": "approval",
           "timeoutMs": 120000,
+          "identityPolicy": {
+            "allowExistingBindingMigration": false
+          },
           "listener": {
             "enabled": false
           },
@@ -57,7 +60,8 @@
             },
             "drafting": {
               "toolsEnabled": false,
-              "timeoutSeconds": 120
+              "timeoutSeconds": 120,
+              "documentWorkspaceIds": []
             }
           }
         }

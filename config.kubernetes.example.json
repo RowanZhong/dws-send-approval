@@ -29,6 +29,9 @@
           "dwsPath": "/usr/local/bin/dws",
           "mode": "approval",
           "timeoutMs": 120000,
+          "identityPolicy": {
+            "allowExistingBindingMigration": false
+          },
           "listener": {
             "enabled": false
           },
@@ -36,7 +39,28 @@
             "enabled": true,
             "cardTemplateId": "${OC_DWS_ASSISTANT_CARD_TEMPLATE_ID}",
             "draftTtlMinutes": 1440,
-            "cardTtlMinutes": 30
+            "cardTtlMinutes": 30,
+            "cards": {
+              "expiryCheckSeconds": 10,
+              "presentationVersion": 2
+            },
+            "storage": {
+              "retentionDays": 7,
+              "expiredCardRetentionHours": 24,
+              "cleanupIntervalSeconds": 300,
+              "dedupeRetentionDays": 30
+            },
+            "context": {
+              "historyMinutes": 5
+            },
+            "directBatch": {
+              "mergeGapSeconds": 30
+            },
+            "drafting": {
+              "toolsEnabled": false,
+              "timeoutSeconds": 120,
+              "documentWorkspaceIds": []
+            }
           }
         }
       }
