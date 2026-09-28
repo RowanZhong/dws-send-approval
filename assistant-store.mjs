@@ -10,6 +10,8 @@ export function messageKey(event, profile) {
 }
 export const PENDING = new Set(["generating", "classifying", "pending", "inbox", "stale", "draft-error", "topic-review"]);
 export const EDITABLE = new Set(["pending", "draft-error", "inbox", "topic-review"]);
+const TERMINAL = new Set(["sent", "ignored", "expired", "superseded", "suppressed", "filtered"]);
+const DAY = 86400000;
 export class AssistantStore {
   constructor(config) {
     this.config = config;
@@ -27,6 +29,8 @@ export class AssistantStore {
         conversation TEXT NOT NULL, status TEXT NOT NULL, version INTEGER NOT NULL, updated INTEGER NOT NULL, body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS draft_conversation ON drafts(conversation,updated);
       CREATE INDEX IF NOT EXISTS draft_status ON drafts(status,updated);
+      CREATE TABLE IF NOT EXISTS message_fingerprints (message_key TEXT PRIMARY KEY, expires INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS fingerprint_expiry ON message_fingerprints(expires);
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, expires INTEGER NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS card_heads (track TEXT PRIMARY KEY, card_id TEXT NOT NULL);
       INSERT OR IGNORE INTO card_heads(track,card_id)
@@ -76,6 +80,10 @@ export class AssistantStore {
     const r = this.db.prepare("SELECT body FROM drafts WHERE message_key=?").get(key);
     return r ? JSON.parse(r.body) : undefined;
   }
+  seen(key) {
+    return Boolean(this.db.prepare("SELECT 1 FROM drafts WHERE message_key=?").get(key) ||
+      this.db.prepare("SELECT 1 FROM message_fingerprints WHERE message_key=?").get(key));
+  }
   draft(id) {
     const r = this.db.prepare("SELECT body FROM drafts WHERE id=?").get(Number(id));
     return r ? JSON.parse(r.body) : undefined;
@@ -96,7 +104,9 @@ export class AssistantStore {
   }
   create(event, preferences, reply, now = Date.now()) {
     const key = messageKey(event, this.config.profile);
-    if (this.find(key)) {
+    const timestamp = Number(event.timestamp);
+    const messageTime = timestamp < 100000000000 ? timestamp * 1000 : timestamp;
+    if (this.seen(key) || (Number.isFinite(messageTime) && messageTime < now - this.config.assistant.storage.dedupeRetentionDays * DAY)) {
       return null;
     }
     const pending = this.list([...PENDING], 201);
@@ -127,6 +137,7 @@ export class AssistantStore {
         updated: now,
         expires: now + this.config.assistant.draftTtlMinutes * 60000,
         text: "",
+        ...(!Number.isFinite(messageTime) || messageTime > now + 300000 ? { timeUntrusted: true } : {}),
       };
       this.put(value);
       this.db.exec("COMMIT");
@@ -137,6 +148,10 @@ export class AssistantStore {
     }
   }
   put(value) {
+    if (TERMINAL.has(value.status)) {
+      const previous = this.draft(value.id);
+      value = { ...value, terminalAt: value.terminalAt ?? (TERMINAL.has(previous?.status) ? previous.terminalAt ?? previous.updated : value.updated ?? Date.now()) };
+    } else if (value.terminalAt !== undefined) value = { ...value, terminalAt: undefined };
     this.db
       .prepare("UPDATE drafts SET status=?,version=?,updated=?,body=? WHERE id=?")
       .run(
@@ -202,27 +217,61 @@ export class AssistantStore {
       .map((r) => JSON.parse(r.body))
       .filter((c) => c.refs?.some((r) => r.id === id));
   }
-  prune(now = Date.now()) {
-    this.db
-      .prepare("DELETE FROM kv WHERE key LIKE 'cooldown:%' AND CAST(body AS INTEGER)<?")
-      .run(now - 86400000);
-    this.db.prepare("DELETE FROM cards WHERE expires<? AND json_extract(body,'$.inactivePainted')=1").run(now - 7 * 86400000);
-    this.db
-      .prepare(
-        "DELETE FROM cards WHERE expires<? AND json_extract(body,'$.inactivePainted')=1 AND id NOT IN (SELECT id FROM cards ORDER BY expires DESC LIMIT 1000)",
-      )
-      .run(now);
+  expireDrafts(now = Date.now()) {
     for (const draft of this.list([...PENDING])) {
       if (draft.expires <= now) {
-        this.put({ ...draft, status: "expired", version: draft.version + 1 });
+        this.put({ ...draft, status: "expired", version: draft.version + 1, updated: now });
       }
     }
-    // Keep recent fingerprints even for ignored messages; never evict pending or uncertain sends.
-    this.db
-      .prepare(
-        "DELETE FROM drafts WHERE status IN ('sent','ignored','expired','superseded','suppressed','filtered') AND updated<?",
-      )
-      .run(now - 30 * 86400000);
+  }
+  prune(now = Date.now()) {
+    const { retentionDays, expiredCardRetentionHours, dedupeRetentionDays } = this.config.assistant.storage;
+    this.expireDrafts(now);
+    const liveRefs = new Set(this.listCards().filter((c) => c.expires > now ||
+      (c.invalidated && !c.inactivePainted && (c.invalidatedAt ?? c.expires) > now - 7 * DAY)).flatMap((c) => c.refs?.map((r) => r.id) ?? []));
+    const candidates = this.db.prepare(`SELECT body FROM drafts WHERE status IN ('sent','ignored','expired','superseded','suppressed','filtered')
+      AND updated<? ORDER BY updated LIMIT 200`).all(now - retentionDays * DAY).map((r) => JSON.parse(r.body))
+      .filter((d) => !liveRefs.has(d.id) && (d.terminalAt ?? d.updated) < now - retentionDays * DAY && !d.agentRunPending);
+    this.db.exec("BEGIN IMMEDIATE");
+    let bodiesDeleted = 0, cardsDeleted = 0;
+    try {
+      for (const d of candidates) {
+        this.db.prepare(`INSERT INTO message_fingerprints VALUES(?,?) ON CONFLICT(message_key)
+          DO UPDATE SET expires=max(expires,excluded.expires)`).run(d.key, now + dedupeRetentionDays * DAY);
+        bodiesDeleted += this.db.prepare("DELETE FROM drafts WHERE id=?").run(d.id).changes;
+      }
+      const cardRows = this.db.prepare(`SELECT c.id,c.body FROM cards c WHERE expires<?
+        AND (json_extract(body,'$.inactivePainted')=1 OR id NOT IN (SELECT card_id FROM card_heads))
+        ORDER BY expires LIMIT 200`).all(now - expiredCardRetentionHours * 3600000);
+      for (const row of cardRows) cardsDeleted += this.db.prepare("DELETE FROM cards WHERE id=?").run(row.id).changes;
+      // A permanently unreachable card retains only its authority/navigation tombstone after 7 days.
+      for (const { body } of this.db.prepare(`SELECT body FROM cards WHERE expires<?
+        AND coalesce(json_extract(body,'$.invalidatedAt'),expires)<?
+        AND json_extract(body,'$.inactivePainted') IS NOT 1 AND json_extract(body,'$.paintAbandoned') IS NOT 1 LIMIT 100`).all(now - 7 * DAY, now - 7 * DAY)) {
+        const c = JSON.parse(body);
+        this.card({ ...c, args: {}, fields: [], actions: [], refs: [], renderedData: undefined,
+          invalidated: c.invalidated || "卡片已到期", paintAbandoned: true, nextPaintAttemptAt: Number.MAX_SAFE_INTEGER });
+      }
+      this.db.prepare("DELETE FROM cards WHERE id IN (SELECT id FROM cards WHERE expires<? AND json_extract(body,'$.paintAbandoned')=1 LIMIT 100)").run(now - dedupeRetentionDays * DAY);
+      this.db.prepare("DELETE FROM card_heads WHERE card_id NOT IN (SELECT id FROM cards)").run();
+      this.db.prepare("DELETE FROM message_fingerprints WHERE message_key IN (SELECT message_key FROM message_fingerprints WHERE expires<? LIMIT 500)").run(now);
+      this.db.prepare("DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE key LIKE 'cooldown:%' AND CAST(body AS INTEGER)<? LIMIT 200)").run(now - DAY);
+      const coverage = this.get("notificationCoverage");
+      if (coverage) this.set("notificationCoverage", Object.fromEntries(Object.entries(coverage)
+        .filter(([id, r]) => this.draft(id) && this.cardForTrack(r.track)?.expires > now)));
+      this.set("storageMaintenance", { at: now, bodiesDeleted, cardsDeleted });
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    // Non-blocking checkpoint: busy readers leave WAL work to the next idle pass.
+    this.db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+    return { bodiesDeleted, cardsDeleted };
+  }
+  storageStats() {
+    const value = (sql) => Object.values(this.db.prepare(sql).get())[0];
+    return { drafts: value("SELECT count(*) FROM drafts"), cards: value("SELECT count(*) FROM cards"),
+      fingerprints: value("SELECT count(*) FROM message_fingerprints"),
+      pageBytes: value("PRAGMA page_size"), pages: value("PRAGMA page_count"), reusablePages: value("PRAGMA freelist_count"),
+      lastCleanup: this.get("storageMaintenance") };
   }
   close() {
     this.db?.close();

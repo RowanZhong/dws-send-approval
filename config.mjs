@@ -53,6 +53,17 @@ export function readConfig(raw = {}, { discovery = false } = {}) {
     throw new Error("assistant.cards.expiryCheckSeconds must be 5..60");
   }
   assistant.cards = Object.freeze(cards);
+  const storage = { retentionDays: 7, expiredCardRetentionHours: 24, cleanupIntervalSeconds: 300,
+    dedupeRetentionDays: 30, ...assistant.storage };
+  if (assistant.storage !== undefined && (!assistant.storage || typeof assistant.storage !== "object" || Array.isArray(assistant.storage))) {
+    throw new Error("assistant.storage must be an object");
+  }
+  for (const [key, min, max] of [["retentionDays", 1, 30], ["expiredCardRetentionHours", 1, 168],
+    ["cleanupIntervalSeconds", 30, 86400], ["dedupeRetentionDays", 1, 365]]) {
+    if (!Number.isInteger(storage[key]) || storage[key] < min || storage[key] > max) throw new Error(`assistant.storage.${key} must be ${min}..${max}`);
+  }
+  if (storage.dedupeRetentionDays < storage.retentionDays) throw new Error("dedupe retention cannot be shorter than body retention");
+  assistant.storage = Object.freeze(storage);
   if (
     typeof assistant.enabled !== "boolean" ||
     typeof assistant.cardTemplateId !== "string" ||

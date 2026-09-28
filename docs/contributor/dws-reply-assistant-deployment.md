@@ -1,5 +1,14 @@
 # 钉钉个人代回复助手 · 技术方案与安装配置
 
+<!-- staged-upgrade:start -->
+## 本提交的增量说明
+
+本分支尚未完成整体发布验收。以下为本提交已经接入的行为；下文已发布基线中的同类说明以此为准。
+
+- assistant.storage 默认 retentionDays=7、expiredCardRetentionHours=24、cleanupIntervalSeconds=300、dedupeRetentionDays=30；assistant.cards.expiryCheckSeconds=10。正文与去重指纹分离，清理有数量上限，保留可见有效卡片和未决发送；SQLite 删除产生可复用页，不等同文件压缩。
+
+<!-- staged-upgrade:end -->
+
 **开发及运维指南 · 0.8.0 · 2026-09-27**
 
 面向开发人员和平台管理员。员工操作另见[员工使用手册](../user/dws-reply-assistant-manual.html)。适用一名员工一个 Pod、独立 OpenClaw 实例；兼容验证覆盖 OpenClaw 2026.7.1-2 与 2026.8.1。

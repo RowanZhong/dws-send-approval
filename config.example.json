@@ -2,7 +2,9 @@
   "commands": {
     "text": true,
     "allowFrom": {
-      "dingtalk": ["OWNER_STAFF_ID"]
+      "dingtalk": [
+        "OWNER_STAFF_ID"
+      ]
     }
   },
   "approvals": {
@@ -36,7 +38,16 @@
             "enabled": true,
             "cardTemplateId": "PUBLISHED_ASSISTANT_CARD_TEMPLATE_ID",
             "draftTtlMinutes": 1440,
-            "cardTtlMinutes": 30
+            "cardTtlMinutes": 30,
+            "cards": {
+              "expiryCheckSeconds": 10
+            },
+            "storage": {
+              "retentionDays": 7,
+              "expiredCardRetentionHours": 24,
+              "cleanupIntervalSeconds": 300,
+              "dedupeRetentionDays": 30
+            }
           }
         }
       }

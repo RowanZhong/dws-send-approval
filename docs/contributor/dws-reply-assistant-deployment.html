@@ -36,10 +36,17 @@
 .scenario-rating .rating-muted{color:#afb5af}.rating-note{display:block;font-size:11px;color:var(--muted);margin-top:5px;white-space:nowrap}
 #sec-3 h3{margin-top:38px;padding-top:3px;padding-bottom:3px;font-size:19px}#sec-3 h4{font-size:14px;margin:24px 0 10px;color:var(--accent)}
 @media print{.scenario-overview table{min-width:0}.scenario-overview th,.scenario-overview td{padding:8px;font-size:10px}.scenario-rating{font-size:12px;letter-spacing:0}.rating-note{font-size:9px}}
-</style></head><body data-guide="developer"><header><div class="edition">FIELD GUIDE / 2026.09 · v0.8.0</div><div class="eyebrow">DINGTALK · PERSONAL REPLY ASSISTANT</div><h1>钉钉个人代回复助手<br>技术方案与安装配置</h1><p>面向开发人员与平台管理员：架构、部署、身份绑定、模板发布、验证与运维。</p><div class="badges"><span>助手 0.8.0</span><span>OpenClaw 2026.7.1-2 / 2026.8.1</span><span>默认关闭监听</span><span>开发与运维</span></div><div class="journey"><div><b>01 · 理清边界</b><small>架构与可信身份</small></div><div><b>02 · 统一部署</b><small>配置模板与员工隔离</small></div><div><b>03 · 可复核交付</b><small>测试、性能与运维</small></div></div></header><div class="layout"><aside><strong>CONTENTS · 阅读导航</strong><a href="#sec-1">1. 整体方案与定向控制原理 </a><a href="#sec-2">2. 技术架构与边界 </a><a href="#sec-3">3. 管理员安装、升级和卡片模板 </a><a href="#sec-4">4. 配置项从哪里来 </a><a href="#sec-5">5. 15000 个 Pod 的统一部署 </a><a href="#sec-6">6. 独立维护边界 </a><a href="#sec-7">7. 验证、性能与交付状态 </a><a href="#sec-8">8. 卡片协议、组件与发布验收 </a><a href="#sec-9">9. 开发、打包与交付 </a></aside><main><nav class="doc-switch"><a href="../user/dws-reply-assistant-manual.html">员工使用手册 ↗</a><a href="#sec-1">从第一节开始 ↓</a></nav><article>
+</style></head><body data-guide="developer"><header><div class="edition">FIELD GUIDE / 2026.09 · v0.8.0</div><div class="eyebrow">DINGTALK · PERSONAL REPLY ASSISTANT</div><h1>钉钉个人代回复助手<br>技术方案与安装配置</h1><p>面向开发人员与平台管理员：架构、部署、身份绑定、模板发布、验证与运维。</p><div class="badges"><span>助手 0.8.0</span><span>OpenClaw 2026.7.1-2 / 2026.8.1</span><span>默认关闭监听</span><span>开发与运维</span></div><div class="journey"><div><b>01 · 理清边界</b><small>架构与可信身份</small></div><div><b>02 · 统一部署</b><small>配置模板与员工隔离</small></div><div><b>03 · 可复核交付</b><small>测试、性能与运维</small></div></div></header><div class="layout"><aside><strong>CONTENTS · 阅读导航</strong><a href="#sec-1">本提交的增量说明 </a><a href="#sec-2">1. 整体方案与定向控制原理 </a><a href="#sec-3">2. 技术架构与边界 </a><a href="#sec-4">3. 管理员安装、升级和卡片模板 </a><a href="#sec-5">4. 配置项从哪里来 </a><a href="#sec-6">5. 15000 个 Pod 的统一部署 </a><a href="#sec-7">6. 独立维护边界 </a><a href="#sec-8">7. 验证、性能与交付状态 </a><a href="#sec-9">8. 卡片协议、组件与发布验收 </a><a href="#sec-10">9. 开发、打包与交付 </a></aside><main><nav class="doc-switch"><a href="../user/dws-reply-assistant-manual.html">员工使用手册 ↗</a><a href="#sec-1">从第一节开始 ↓</a></nav><article>
+<!-- staged-upgrade:start -->
+<section class="doc-section" id="sec-1"><h2 id="本提交的增量说明" tabindex="-1">本提交的增量说明 <a class="header-anchor" href="#本提交的增量说明" aria-label="Permalink to &quot;本提交的增量说明&quot;">&ZeroWidthSpace;</a></h2>
+<p>本分支尚未完成整体发布验收。以下为本提交已经接入的行为；下文已发布基线中的同类说明以此为准。</p>
+<ul>
+<li>assistant.storage 默认 retentionDays=7、expiredCardRetentionHours=24、cleanupIntervalSeconds=300、dedupeRetentionDays=30；assistant.cards.expiryCheckSeconds=10。正文与去重指纹分离，清理有数量上限，保留可见有效卡片和未决发送；SQLite 删除产生可复用页，不等同文件压缩。</li>
+</ul>
+<!-- staged-upgrade:end -->
 <p><strong>开发及运维指南 · 0.8.0 · 2026-09-27</strong></p>
 <p>面向开发人员和平台管理员。员工操作另见<a href="./../user/dws-reply-assistant-manual.html">员工使用手册</a>。适用一名员工一个 Pod、独立 OpenClaw 实例；兼容验证覆盖 OpenClaw 2026.7.1-2 与 2026.8.1。</p>
-<section class="doc-section" id="sec-1"><h2 id="_1-整体方案与定向控制原理" tabindex="-1">1. 整体方案与定向控制原理 <a class="header-anchor" href="#_1-整体方案与定向控制原理" aria-label="Permalink to &quot;1. 整体方案与定向控制原理&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-2"><h2 id="_1-整体方案与定向控制原理" tabindex="-1">1. 整体方案与定向控制原理 <a class="header-anchor" href="#_1-整体方案与定向控制原理" aria-label="Permalink to &quot;1. 整体方案与定向控制原理&quot;">&ZeroWidthSpace;</a></h2>
 <p>这套方案为每名员工的独立 OpenClaw 实例增加一条<strong>受控的个人消息处理流程</strong> ：DWS 用员工已登录的身份接收消息，自定义插件按员工设置筛选来源、识别消息主题、生成草稿并管理授权，社区钉钉插件负责投递卡片和接收本人操作。员工可以确认后发送，也可以提前授权有范围、有期限的固定答复。平台统一部署代码和配置模板，员工自己的身份、监听偏好与状态保留在各自 Pod 的持久化目录中。</p>
 <p>核心做法是<strong>把来信内容与可执行权限分开</strong> 。当前默认的助手模式不会把陌生人的消息交给有工具权限的主 Agent，而是调用宿主的无工具文本生成接口起草回复。拟稿输入限定为本条来信、同一会话的有限上下文、写作要求和本人为本条补充的资料。模型生成的文字不能直接执行命令或更换接收人；只有插件中的发送器能把经过授权的完整正文发回绑定的来源会话。</p>
 <h3 id="一条消息如何走到发送" tabindex="-1">一条消息如何走到发送 <a class="header-anchor" href="#一条消息如何走到发送" aria-label="Permalink to &quot;一条消息如何走到发送&quot;">&ZeroWidthSpace;</a></h3>
@@ -84,7 +91,7 @@
 </tbody>
 </table></div>
 <p><strong>“定向”有明确前提，不是绝对零误拦的承诺。</strong> 正常主会话必须由宿主正确提供会话键，且不使用保留的监听标记；来源缺失时，对匹配的 DWS 发信及任务转交采取保守拒绝。旧路径的命令检测只覆盖指定 DWS 发信形式，不是任意脚本、HTTP、其他工具或主 Agent 的全局安全沙箱。当前助手模式通过无工具拟稿和固定发送器缩小权限面；员工主动补充的敏感资料仍可能出现在草稿里，发送前应核对全文。</p>
-</section><section class="doc-section" id="sec-2"><h2 id="_2-技术架构与边界" tabindex="-1">2. 技术架构与边界 <a class="header-anchor" href="#_2-技术架构与边界" aria-label="Permalink to &quot;2. 技术架构与边界&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-3"><h2 id="_2-技术架构与边界" tabindex="-1">2. 技术架构与边界 <a class="header-anchor" href="#_2-技术架构与边界" aria-label="Permalink to &quot;2. 技术架构与边界&quot;">&ZeroWidthSpace;</a></h2>
 <div id="architecture"></div>
 <figure class="code-block"><figcaption>文本示例</figcaption><pre tabindex="0" aria-label="文本示例"><code>DWS 认证事件 → 范围过滤、业务消息去重 → 持久化草稿/收件箱
                                       ├─ 已授权固定正文 → 确定性发送器
@@ -149,7 +156,7 @@
 <p>settings 仍为 version 1，新增可选 <code>topics:{enabled,mode,revision,rules}</code>，读旧状态时填默认值，既有偏好不变。规则保存、停用、删除及主题模式变更递增独立 revision；仅修改提醒不会使判类失效。来源偏好与主题版本在模型返回后和发送前双重检查，设置中途变化不能继续自动发送。重启将 classifying 恢复为 topic-review，将 sending 恢复为 unknown；不自动重试发送。filtered 记录沿用 30 天终态清理策略。同一会话新来信仍使旧待办失效，包括后来明确被主题过滤的消息。</p>
 <p>主题动作支持自动固定模板、模板待确认、只整理。自动授权最长 7 天，到期仍匹配但转模板待确认；同一规则同一会话冷却最少 5 分钟，与既有关键词自动规则共享每小时 30 条上限。主题自动规则与关键词授权命中不同正文时转人工。“不处理”、暂停、只整理优先。群内发送沿用已验证的原消息引用发送路径。</p>
 <p>卡片复用既有动态 <code>form.fields</code>、6 个按钮和有效期备注；每页不超过 4 个字段，六步向导最终确认读取服务端保存的摘要。自动授权必须至少完成一条正向试判；试判页面不发送、不扩大来源，不续期已有规则。0.7.0 新增主题时无需更新模板；本次独立项目的 Channel 接口选择与安装要求以第 3 节为准。</p>
-</section><section class="doc-section" id="sec-3"><h2 id="_3-管理员安装、升级和卡片模板" tabindex="-1">3. 管理员安装、升级和卡片模板 <a class="header-anchor" href="#_3-管理员安装、升级和卡片模板" aria-label="Permalink to &quot;3. 管理员安装、升级和卡片模板&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-4"><h2 id="_3-管理员安装、升级和卡片模板" tabindex="-1">3. 管理员安装、升级和卡片模板 <a class="header-anchor" href="#_3-管理员安装、升级和卡片模板" aria-label="Permalink to &quot;3. 管理员安装、升级和卡片模板&quot;">&ZeroWidthSpace;</a></h2>
 <h3 id="独立项目与版本组合" tabindex="-1">独立项目与版本组合 <a class="header-anchor" href="#独立项目与版本组合" aria-label="Permalink to &quot;独立项目与版本组合&quot;">&ZeroWidthSpace;</a></h3>
 <p>从 0.8.0 起，助手在独立项目 <code>dws-send-approval</code> 中维护，同一个安装包适配两版宿主。不再向两个社区插件仓库复制业务源码。</p>
 <div class="table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0"><table>
@@ -215,7 +222,7 @@ openclaw plugins install ./artifacts/dws-send-approval-0.8.0.tgz
 <figure class="code-block"><figcaption>命令示例</figcaption><pre tabindex="0" aria-label="命令示例"><code>openclaw gateway restart
 openclaw channels status --probe --json
 </code></pre></figure>
-</section><section class="doc-section" id="sec-4"><h2 id="_4-配置项从哪里来" tabindex="-1">4. 配置项从哪里来 <a class="header-anchor" href="#_4-配置项从哪里来" aria-label="Permalink to &quot;4. 配置项从哪里来&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-5"><h2 id="_4-配置项从哪里来" tabindex="-1">4. 配置项从哪里来 <a class="header-anchor" href="#_4-配置项从哪里来" aria-label="Permalink to &quot;4. 配置项从哪里来&quot;">&ZeroWidthSpace;</a></h2>
 <div class="table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0"><table>
 <thead>
 <tr>
@@ -365,7 +372,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 </code></pre></figure>
 <p><code>commands.allowFrom.dingtalk</code> 只允许本人使用该渠道的宿主命令，它不替代 <code>channels.dingtalk.dmPolicy/allowFrom</code>。保留原有其他渠道项，不添加全局 <code>*</code> 规则；该钉钉项不会改变 Web 渠道原有权限。所有助手命令和按钮仍独立校验本人身份及私聊来源。</p>
 <p><code>mode:block</code> 是平台层禁止代发送；不等于停止监听。员工开关及选项存放在独立状态文件中，已有偏好优先于初始模板。</p>
-</section><section class="doc-section" id="sec-5"><h2 id="_5-15000-个-pod-的统一部署" tabindex="-1">5. 15000 个 Pod 的统一部署 <a class="header-anchor" href="#_5-15000-个-pod-的统一部署" aria-label="Permalink to &quot;5. 15000 个 Pod 的统一部署&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-6"><h2 id="_5-15000-个-pod-的统一部署" tabindex="-1">5. 15000 个 Pod 的统一部署 <a class="header-anchor" href="#_5-15000-个-pod-的统一部署" aria-label="Permalink to &quot;5. 15000 个 Pod 的统一部署&quot;">&ZeroWidthSpace;</a></h2>
 <p>同一镜像、同一 ConfigMap 模板。profile 和机器人开放 ID 已由插件自动发现；剩余身份和模板由开户平台提供：</p>
 <div class="table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0"><table>
 <thead>
@@ -392,11 +399,11 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <p>身份发现仅顺序启动短生命周期 CLI，同一解析过程最多一个查询子进程，不增加常驻身份查询进程。全部私聊 + 所有群 @本人可合并为一个 DWS consume 进程；指定人员可能按唯一目标增加消费进程，最多 41 个（两个各 20 人列表并集 + 一个广泛订阅）。DWS 自身的事件总线进程、连接、认证与平台订阅配额也要纳入集群预算。群范围过滤在本地，不会为每个群额外创建一个消费进程。</p>
 <p>15000 Pod 应分批滚动发布，并保留员工 PVC 的身份缓存。冷缓存且已开启监听的实例仍需访问机器人接口；插件的有限重试和抖动不能替代企业侧批次、配额与整体容量控制。DWS 配置目录和运行用户必须一致，容器临时目录也应保持一致。</p>
 <p>升级、回滚按第 3 节的版本组合和迁移步骤执行。维护时备份整个助手状态目录，保留发送记录供核对，不把 unknown 状态批量重试；旧宿主无需因助手抽离而更换既有兼容 Channel。</p>
-</section><section class="doc-section" id="sec-6"><h2 id="_6-独立维护边界" tabindex="-1">6. 独立维护边界 <a class="header-anchor" href="#_6-独立维护边界" aria-label="Permalink to &quot;6. 独立维护边界&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-7"><h2 id="_6-独立维护边界" tabindex="-1">6. 独立维护边界 <a class="header-anchor" href="#_6-独立维护边界" aria-label="Permalink to &quot;6. 独立维护边界&quot;">&ZeroWidthSpace;</a></h2>
 <p>助手只依赖卡片投递、更新和可信 Stream 回调，不依赖大文件上传上限、问卷人数或问卷超时增强。新版只跟随原作者代码与通用卡片接口，不继续维护这些无关改动；旧版兼容分支保留已有历史提交。</p>
 <p>助手项目不包含完整的 Channel，也不直接持有社区机器人的密钥或另建 Stream 连接。通用客户端在 <code>vendor/</code> 中保存固定版本与 MIT 声明，通过进程内注册表调用已经加载的 Channel；旧桥接仅为兼容已有部署。</p>
 <p>接口可用时，临时断线或请求错误不会触发跨接口重试。切换接口导致旧操作卡停用，业务状态保留。接口升级应连同宿主版本、补丁校验值与卡片真机回归一起验收。</p>
-</section><section class="doc-section" id="sec-7"><h2 id="_7-验证、性能与交付状态" tabindex="-1">7. 验证、性能与交付状态 <a class="header-anchor" href="#_7-验证、性能与交付状态" aria-label="Permalink to &quot;7. 验证、性能与交付状态&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-8"><h2 id="_7-验证、性能与交付状态" tabindex="-1">7. 验证、性能与交付状态 <a class="header-anchor" href="#_7-验证、性能与交付状态" aria-label="Permalink to &quot;7. 验证、性能与交付状态&quot;">&ZeroWidthSpace;</a></h2>
 <h3 id="_0-8-0-独立项目抽离验收-2026-09-27" tabindex="-1">0.8.0 独立项目抽离验收（2026-09-27） <a class="header-anchor" href="#_0-8-0-独立项目抽离验收-2026-09-27" aria-label="Permalink to &quot;0.8.0 独立项目抽离验收（2026-09-27）&quot;">&ZeroWidthSpace;</a></h3>
 <ul>
 <li>两版宿主各 <strong>302 项</strong>测试通过，包含原业务回归及 13 项卡片接口和迁移测试。实际安装的两版 SDK 均完成命令注册、权限控制、主会话执行通道、无工具模型调用及启动隔离检查。</li>
@@ -553,7 +560,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <p>这些数据不能直接乘以 15000 推算集群容量：基准没有运行完整 Gateway、卡片过期批量回写、通讯录/群名校验、DWS consume/bus 进程、真实模型或钉钉网络，也不覆盖大文件并发上传和 1000 人真实填表。实际容量需按员工启用比例、订阅目标数、来信峰值、模型配额与磁盘类型测量。默认不开监听有助于避免无意启动 15000 组消费进程。</p>
 <p>已完成开发平台模板发布、两版桌面卡片交互，以及后续真实私聊和群内 @代回复链路；分轮结果见下一节。手机端、20 MiB 实际上传、1000 人真实填表与 Kubernetes 15000 实例压测未执行。0.5.2 的引用回复和即时审批卡独立记录验收结果，不以此前普通群消息发送代替。</p>
 <p>上一轮页面真机测试只在本人和测试机器人私聊中操作，没有替本人向联系人或群发送个人 IM 消息。该轮没有提交或发布远端 Git 代码；发布的是测试组织内新建的专用卡片模板。原有问卷卡片模板未修改。</p>
-</section><section class="doc-section" id="sec-8"><h2 id="_8-卡片协议、组件与发布验收" tabindex="-1">8. 卡片协议、组件与发布验收 <a class="header-anchor" href="#_8-卡片协议、组件与发布验收" aria-label="Permalink to &quot;8. 卡片协议、组件与发布验收&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-9"><h2 id="_8-卡片协议、组件与发布验收" tabindex="-1">8. 卡片协议、组件与发布验收 <a class="header-anchor" href="#_8-卡片协议、组件与发布验收" aria-label="Permalink to &quot;8. 卡片协议、组件与发布验收&quot;">&ZeroWidthSpace;</a></h2>
 <p>模板只是可复用的展示结构，业务状态保存在插件中。首页、范围设置、草稿、批处理和历史使用同一个模板，以变量切换标题、说明、动态表单及最多六个按钮；不是把所有页面塞进一张卡片。</p>
 <div class="table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0"><table>
 <thead>
@@ -729,7 +736,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <p>两版各只发送一条本轮授权测试回复。测试临时配置和插件状态已按快照恢复，旧测试网关停止、原新版网关恢复；详细记录见 <code>docs/assets/dws-assistant-core-progress.json</code>。手机端和 Kubernetes 15000 Pod 负载测试仍未执行，不能由桌面单实例验收推断生产容量。</p>
 <p><strong>本轮 DWS 故障纠正与恢复：</strong> 较早 O3 轮曾出现 <code>SYSTEM_ERROR</code>，当时未收到消息、没有发送 O3 回复。随后有界诊断恢复成功，O4 与 N2 均通过完整真实收发。DWS 1.0.58 的 <code>event status</code> 解析字段为 <code>items</code>，本次服务端返回却为 <code>list</code>，因此 CLI 显示 <code>subscriptions: []</code> 不能作为“服务端没有订阅”的证据；此前结论已纠正。具体上游瞬时错误原因未确定，未删除订阅保护文件或更改权限。</p>
 <p><strong>本机双环境注意：</strong> DWS 的身份锁按配置目录共享，而 Unix socket 路径受 <code>TMPDIR</code> / <code>XDG_RUNTIME_DIR</code> 影响。本轮旧版前台测试与新版 launchd 后台服务的临时目录不同，遗留总线存活时新版消费进程无法接入；等待旧总线正常空闲退出后，新版在自身临时目录建立总线并完成真机验收。运维诊断命令应使用与网关一致的运行用户、profile、配置目录及临时目录；切换两套环境时先正常停止消费进程并确认总线生命周期。企业一员工一 Pod 模式应让同一实例内的 DWS 命令继承一致的运行环境。</p>
-</section><section class="doc-section" id="sec-9"><h2 id="_9-开发、打包与交付" tabindex="-1">9. 开发、打包与交付 <a class="header-anchor" href="#_9-开发、打包与交付" aria-label="Permalink to &quot;9. 开发、打包与交付&quot;">&ZeroWidthSpace;</a></h2>
+</section><section class="doc-section" id="sec-10"><h2 id="_9-开发、打包与交付" tabindex="-1">9. 开发、打包与交付 <a class="header-anchor" href="#_9-开发、打包与交付" aria-label="Permalink to &quot;9. 开发、打包与交付&quot;">&ZeroWidthSpace;</a></h2>
 <p>助手源码在本项目根目录，<code>index.mjs</code> 为入口，<code>card-transport.mjs</code> 统一适配两类 Channel 接口。原社区项目中的副本不再作为后续开发入口。</p>
 <figure class="code-block"><figcaption>命令示例</figcaption><pre tabindex="0" aria-label="命令示例"><code>npm ci
 npm run check

@@ -121,6 +121,36 @@
                 "description": "Lightweight card expiry checks; independent of card lifetime and storage cleanup."
               }
             }
+          },
+          "storage": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "retentionDays": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30,
+                "default": 7
+              },
+              "expiredCardRetentionHours": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 168,
+                "default": 24
+              },
+              "cleanupIntervalSeconds": {
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 86400,
+                "default": 300
+              },
+              "dedupeRetentionDays": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 365,
+                "default": 30
+              }
+            }
           }
         }
       }

@@ -612,6 +612,10 @@ export function createAssistant(api, config, dependencies = {}) {
     if (!d) {
       return;
     }
+    if (d.timeUntrusted) {
+      notice(store.put({ ...d, status: "inbox", error: "来信时间异常，请核实后手动处理。", updated: now() }));
+      return;
+    }
     for (const previous of store.list([...PENDING])) {
       if (previous.id !== d.id && previous.event.conversation_id === event.conversation_id) {
         store.put({
@@ -1023,7 +1027,7 @@ export function createAssistant(api, config, dependencies = {}) {
     show,
     handle,
     processEvent: (...args) => track(processEvent(...args)),
-    has: (event) => !closed && Boolean(store.find(messageKey(event, config.profile))),
+    has: (event) => !closed && store.seen(messageKey(event, config.profile)),
     async start(ctx) {
       await store.open(ctx.stateDir);
       try { managedTransport?.start(); } catch (error) { store.close(); throw error; }
@@ -1045,7 +1049,7 @@ export function createAssistant(api, config, dependencies = {}) {
         track(maintenance());
       }, config.assistant.cards.expiryCheckSeconds * 1000);
       timer.unref?.();
-      cleanupTimer = setInterval(cleanup, 30000);
+      cleanupTimer = setInterval(cleanup, config.assistant.storage.cleanupIntervalSeconds * 1000);
       cleanupTimer.unref?.();
     },
     async stop() {
