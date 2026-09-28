@@ -130,3 +130,11 @@ test("all original and new pages render structured content with bounded actions 
   assert.equal(tree.children.filter(n => n.componentName === "MarkdownBlock").length, 4);
   assert.equal(tree.children.find(n=>n.componentName==="Form").children.length, 6);
 });
+
+test("company-migrated cards explain suspended authority in both presentations without recovery actions", () => {
+  for (const presentationVersion of [2, 3]) {
+    const data = inactiveContent({ identityMigrationArchived: true, upgrade: true, presentationVersion, expires: Date.now() + 3600000 }, Date.now());
+    assert.equal(data.title, "公司授权方式已更新"); assert.match(data.description, /原自动发送授权已暂停/);
+    assert.doesNotMatch(data.description, /仍按原有效期生效/); assert.equal(data.action1, ""); assert.equal(data.card_status, "expired");
+  }
+});

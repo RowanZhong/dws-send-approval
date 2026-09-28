@@ -220,6 +220,22 @@
             }
           }
         }
+      },
+      "identityPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "requiredDwsClientId": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{1,128}$",
+            "description": "Company-required DWS OAuth application ID; not the community robot ID."
+          },
+          "allowExistingBindingMigration": {
+            "type": "boolean",
+            "default": false,
+            "description": "Permit a one-way migration of this instance’s saved binding to the required application after verification."
+          }
+        }
       }
     }
   },

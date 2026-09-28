@@ -121,6 +121,9 @@ export default definePluginEntry({
               }
               return { text: "已更新代回复卡片。" };
             } catch (error) {
+              const active = binding.peek();
+              if (name === "dws" && !args && active?.status().state === "company_auth_required")
+                return { text: await active.companyGuidance() };
               return { text: `操作未完成：${error.code ? "请检查服务状态。" : error.message}` };
             }
           },

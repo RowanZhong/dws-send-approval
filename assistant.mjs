@@ -171,7 +171,7 @@ export function createAssistant(api, config, dependencies = {}) {
     mutator(value);
     // Keep the old rule available to an explicit edit even if it expired while
     // the owner was reviewing it. Only the final confirmation renews authority.
-    value.autoRules = value.autoRules.filter((r) => r.expires > now());
+    value.autoRules = value.autoRules.filter((r) => r.appMigrationPaused || r.expires > now());
     value.revision++;
     store.set("settings", validateSettings(value));
     notifications.kick();
@@ -457,6 +457,7 @@ export function createAssistant(api, config, dependencies = {}) {
   }
   function currentDraft(ref, allowStale = false) {
     const d = store.draft(ref?.id);
+    if (d?.identityMigrationArchived) throw new Error("授权应用变更前的草稿仅供查看，不可继续发送或重新起草。");
     if (!d || d.version !== ref.version) {
       throw new Error("草稿已变化，请刷新后再操作。");
     }
@@ -1187,7 +1188,7 @@ export function createAssistant(api, config, dependencies = {}) {
       if (presentation.version === 3) {
         let migrated = false;
         for (const card of store.listCards()) {
-          if (!card.upgrade && ((card.presentationVersion ?? 2) !== 3 || card.templateId !== presentation.templateId)) {
+          if (!card.identityMigrationArchived && !card.upgrade && ((card.presentationVersion ?? 2) !== 3 || card.templateId !== presentation.templateId)) {
             migrated = true;
             store.card({ ...card, templateId: card.templateId ?? previousPresentation?.templateId,
               invalidated: "助手已升级", invalidatedAt: now(), upgrade: { version: 3, at: now() },

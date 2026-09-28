@@ -54,14 +54,17 @@ export function renderContent(view, notice = "") {
   };
 }
 export function inactiveContent(card, now) {
-  const upgrade = Boolean(card.upgrade), canOpen = upgrade && card.expires > now && !card.upgradeRecovery;
-  const description = upgrade
+  const companyMigration = Boolean(card.identityMigrationArchived);
+  const upgrade = !companyMigration && Boolean(card.upgrade), canOpen = upgrade && card.expires > now && !card.upgradeRecovery;
+  const description = companyMigration
+    ? "公司授权方式已更新。\n原设置和历史已保留，旧草稿仅供查看，原自动发送授权已暂停。\n请发送 /dws 打开新卡。"
+    : upgrade
     ? "这张卡片已停用。已保存的设置、草稿和待处理消息都已保留。\n" +
       (canOpen ? "点击下方按钮继续处理。" : card.upgradeRecovery ? "已请求打开新版助手；如未看到新卡，请发送 /dws。" : "此恢复入口已到期，请发送 /dws 打开新版助手。") +
       (["edit", "regenerate"].includes(card.name) ? "\n尚未提交的修改可能需要重新填写。" : "")
     : `${card.invalidated || "卡片已到期"}。\n请发送 /dws 打开新卡；已保存设置仍按原有效期生效。`;
   return {
-    title: upgrade ? "助手已升级" : "代回复助手 · 已失效", description,
+    title: companyMigration ? "公司授权方式已更新" : upgrade ? "助手已升级" : "代回复助手 · 已失效", description,
     ...(card.presentationVersion === 3 ? { content_status: upgrade ? "助手已升级" : "卡片已失效", content_summary: "", content_body: textParagraphs(description), content_notice: "" } : {}),
     card_status: canOpen ? "pending" : "expired", card_expires_note: "也可发送 /dws 打开助手", form: { fields: [] },
     ...Object.fromEntries(Array.from({ length: 6 }, (_, i) => [[`button${i + 1}`, i === 0 && canOpen ? "打开新版助手" : ""],

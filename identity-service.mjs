@@ -4,6 +4,8 @@ import { createListenerService } from "./listener.mjs";
 import { SourceStore } from "./source-store.mjs";
 import { createPolicy } from "./policy.mjs";
 import { runIdentityCli, IdentityError, cancelled } from "./identity-cli.mjs";
+import { prepareIdentityPolicy, migrateIdentity, COMPANY_AUTH_TEXT } from "./identity-migration.mjs";
+import { createIdentityNotice } from "./identity-notice.mjs";
 import {
   channelRobot,
   selectProfile,
@@ -23,6 +25,8 @@ const labels = {
   starting: "正在检测",
   ready: "已就绪",
   waiting_login: "等待 DWS 登录",
+  company_auth_required: "等待公司统一授权",
+  migration_required: "应用迁移待核实",
   account_mismatch: "账号绑定不匹配",
   failed: "检测失败",
   unavailable: "配置或程序不可用",
@@ -36,6 +40,7 @@ const clean = (value) =>
 export function createIdentityService(api, config, dependencies = {}) {
   const runner = dependencies.runner ?? runIdentityCli;
   const now = dependencies.now ?? Date.now;
+  const companyNotice = createIdentityNotice(config, { transport: dependencies.noticeTransport });
   let context,
     running,
     retiring,
@@ -95,6 +100,8 @@ export function createIdentityService(api, config, dependencies = {}) {
       }
     }
     check(signal);
+    if (config.identityPolicy.requiredDwsClientId && selected.dwsClientId !== config.identityPolicy.requiredDwsClientId)
+      throw new IdentityError("company_auth_required", COMPANY_AUTH_TEXT);
     return makeBinding(selected, config, channelRobot(config, context.config));
   };
   let botTask;
@@ -161,6 +168,18 @@ export function createIdentityService(api, config, dependencies = {}) {
     if (dependencies.buildRuntime)
       return dependencies.buildRuntime(resolved, context, { prepareBot, signal: aborter.signal });
     const store = new SourceStore(resolved);
+    const verifyActiveBinding = async () => {
+      if (!config.identityPolicy.requiredDwsClientId) return;
+      const signal = aborter.signal, expected = record.binding;
+      try {
+        if (!sameBinding(await profile(signal), expected) || !sameBinding(record.binding, expected)) throw new IdentityError("account_mismatch", "DWS 当前身份已变化，处理已暂停。");
+        check(signal);
+      } catch (error) {
+        // Retirement must not wait on the ingress/sender job that requested it.
+        if (!closed) { fail(error); void refresh(); }
+        throw Object.assign(error, { noSend: true });
+      }
+    };
     const assistant = resolved.assistant.enabled
       ? createAssistant(api, resolved, {
           send: async (draft) => {
@@ -175,6 +194,12 @@ export function createIdentityService(api, config, dependencies = {}) {
                 new IdentityError("failed", "身份尚未就绪，请先 /dws identity refresh；未发送。"),
                 { noSend: true },
               );
+            }
+            if (config.identityPolicy.requiredDwsClientId) {
+              const signal = aborter.signal;
+              await verifyActiveBinding();
+              if (closed || signal.aborted || state !== "ready")
+                throw Object.assign(new IdentityError("failed", "身份检查期间服务状态已变化，未发送。"), { noSend: true });
             }
             if (
               [record.owner.openId, record.robot.openId].includes(
@@ -194,7 +219,9 @@ export function createIdentityService(api, config, dependencies = {}) {
       prepareStart: prepareBot,
       ...(assistant
         ? {
-            processEvent: assistant.processEvent,
+            processEvent: config.identityPolicy.requiredDwsClientId
+              ? async (...args) => { await verifyActiveBinding(); return assistant.processEvent(...args); }
+              : assistant.processEvent,
             has: assistant.has,
             checkStart: assistant.checkReady,
           }
@@ -222,8 +249,18 @@ export function createIdentityService(api, config, dependencies = {}) {
     await dispose(retiring);
     retiring = undefined;
     check();
+    const identityPolicy = await prepareIdentityPolicy(context.stateDir, config, context.config);
     const binding = await profile(aborter.signal, allowAuthCheck);
-    record = await readIdentity(context.stateDir, binding);
+    if (identityPolicy) {
+      const call = callWith(aborter.signal);
+      verifyAuthStatus(await call(["auth", "status", "--profile", binding.profile, "--format", "json"], 15000), binding);
+      const verifyCurrent = async () => {
+        if (!sameBinding(await profile(), binding)) throw new IdentityError("account_mismatch", "迁移检查期间 DWS 当前身份发生变化，未继续。");
+      };
+      record = await migrateIdentity({ stateDir: context.stateDir, config, binding, policy: identityPolicy, call,
+        signal: aborter.signal, now, verifyCurrent, checkpoint: dependencies.migrationCheckpoint });
+      await verifyCurrent();
+    } else record = await readIdentity(context.stateDir, binding);
     check();
     await writeIdentity(context.stateDir, record, aborter.signal);
     cached = Boolean(record.robot);
@@ -248,6 +285,7 @@ export function createIdentityService(api, config, dependencies = {}) {
         },
       }),
     });
+    companyNotice.stop();
     const next = await buildRuntime(resolved);
     if (closed || aborter.signal.aborted) {
       retiring = next;
@@ -280,7 +318,7 @@ export function createIdentityService(api, config, dependencies = {}) {
         aborter?.abort();
         aborter = new AbortController();
         const current = aborter;
-        const deadline = setTimeout(() => current.abort(), dependencies.budgetMs ?? 30000);
+        const deadline = setTimeout(() => current.abort(), dependencies.budgetMs ?? (config.identityPolicy.requiredDwsClientId ? 120000 : 30000));
         try {
           await initialize(force, allowAuthCheck);
         } catch (error) {
@@ -329,7 +367,7 @@ export function createIdentityService(api, config, dependencies = {}) {
       // Do not return/await the discovery promise: both supported hosts await start().
       startupTimer = setTimeout(() => {
         void refresh(false, true);
-      }, dependencies.startupDelayMs ?? 100);
+      }, dependencies.startupDelayMs ?? (config.identityPolicy.requiredDwsClientId ? 100 + Math.floor(Math.random() * 30000) : 100));
       startupTimer.unref?.();
     },
     async stop() {
@@ -343,10 +381,17 @@ export function createIdentityService(api, config, dependencies = {}) {
       running = undefined;
       await dispose(retiring);
       retiring = undefined;
+      companyNotice.stop();
       state = "stopped";
     },
     refresh,
+    companyGuidance: () => state === "company_auth_required" ? companyNotice.show() : undefined,
     ready: async () => {
+      if (state === "ready" && config.identityPolicy.requiredDwsClientId) {
+        try { if (!sameBinding(await profile(), record.binding)) await refresh(); }
+        catch { await refresh(); }
+        return requireRuntime();
+      }
       if (state !== "ready") await refresh();
       return requireRuntime();
     },

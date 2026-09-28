@@ -10,6 +10,7 @@ export const TOPIC_PAGES = ["topics", "topic-mode", "topic-manage", "topic-detai
 export function buildTopicView(name, state, args, view) {
   if (!TOPIC_PAGES.includes(name)) return false;
   const topics = state.settings.topics ?? initialTopics(), w = args.wizard ?? {};
+  const authorization = (r) => r.appMigrationPaused ? "公司授权应用已更新，请编辑并重新确认自动发送授权。" : `授权${r.expires <= Date.now() ? "已到期" : "有效至"}：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: state.settings.notifications.timezone })}`;
   const back = button("返回消息主题", "topics");
   const targets = (r) => r.targets.map((id) => state.directory.find((x) => x.id === id && x.kind === r.scope)?.name || id).join("、");
   const describe = (r) => `${r.name} · ${r.enabled ? "启用" : "停用"}\n${scopeNames[r.scope]}${r.targets.length ? `：${targets(r)}` : ""}\n${TOPIC_ACTIONS[r.action]}`;
@@ -50,10 +51,10 @@ export function buildTopicView(name, state, args, view) {
     const r = topics.rules.find((r) => r.id === args.id);
     if (!r) throw new Error("主题已删除，请重新打开规则列表。");
     view.title = "主题规则详情";
-    view.description = `${describe(r)}\n\n关注的问题：\n${r.description}\n\n典型问法：\n${r.examples || "未填写"}\n\n不适用情形：\n${r.exclusions || "未填写"}\n\n固定正文：\n${r.text || "只整理，不发送"}${r.action === "auto" ? `\n\n授权${r.expires <= Date.now() ? "已到期" : "有效至"}：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: state.settings.notifications.timezone, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}\n同一会话间隔：${r.cooldownMinutes}分钟` : ""}`;
+    view.description = `${describe(r)}\n\n关注的问题：\n${r.description}\n\n典型问法：\n${r.examples || "未填写"}\n\n不适用情形：\n${r.exclusions || "未填写"}\n\n固定正文：\n${r.text || "只整理，不发送"}${r.action === "auto" ? `\n\n${authorization(r)}\n同一会话间隔：${r.cooldownMinutes}分钟` : ""}`;
     view.content = { status: `${r.name} · ${r.enabled ? "启用" : "停用"}`, summary: [scopeNames[r.scope], ...(r.targets.length ? [targets(r)] : []), TOPIC_ACTIONS[r.action]],
       sections: [{ title: "关注的问题", text: r.description }, { title: "典型问法", text: r.examples || "未填写" }, { title: "不适用情形", text: r.exclusions || "未填写" },
-        { title: "完整固定正文", text: r.text || "只整理，不发送" }, ...(r.action === "auto" ? [{ title: "自动发送授权", text: `授权${r.expires <= Date.now() ? "已到期" : "有效至"}：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: state.settings.notifications.timezone })}\n同一会话间隔：${r.cooldownMinutes} 分钟` }] : [])], notices: [] };
+        { title: "完整固定正文", text: r.text || "只整理，不发送" }, ...(r.action === "auto" ? [{ title: "自动发送授权", text: `${authorization(r)}\n同一会话间隔：${r.cooldownMinutes} 分钟` }] : [])], notices: [] };
     view.buttons = [button("编辑与重新启用", "topic-edit", { id: r.id }), button("试判本规则", "topic-test-saved", { id: r.id }), back];
   } else {
     const cancel = button("取消，不保存", "topics");

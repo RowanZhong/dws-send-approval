@@ -37,6 +37,7 @@ const labels = {
   suppressed: "频率限制，本次未发",
 };
 export function draftStatusLabel(d) {
+  if (d.identityMigrationArchived && d.status !== "unknown") return "授权变更前的草稿 · 仅查看";
   if (d.status === "stale" && d.ownerReplyAt > (d.ownerReplyReviewedAt ?? 0)) return "你已回复，需再次确认";
   return d.status === "draft-error" && d.errorCode === "PROCESS_INTERRUPTED" ? "处理被中断" : labels[d.status] || "待核实";
 }
@@ -95,6 +96,8 @@ export function buildView(name, state, args = {}) {
     if (settings.topics?.enabled && health?.state === "degraded") {
       view.description += `\n\n主题识别异常：${health.reason === "busy" ? "暂时繁忙" : health.reason === "invalid" ? "结果无效" : "调用未完成"}。\n最近异常：${new Date(health.lastFailureAt).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone })}；累计影响 ${health.affectedCount} 条。\n消息已按未明确命中的设置处理，恢复后不会自动补发。`;
     }
+    if (store.get?.("identityAppMigration"))
+      view.description += "\n\n公司授权应用已更新，原设置和历史已保留。旧草稿仅供查看；原自动发送规则需编辑并重新授权后生效。";
     view.content = { status: `监听${prefs.enabled ? "已开启" : "已关闭"} · 待处理 ${count} 条`,
       summary: [`连接状态：${{ off: "已关闭", ready: "就绪", starting: "连接中", failed: "故障", unavailable: "初始化中" }[listener.state] || "待检查"}`,
         `普通回复：${{ ai: "AI 起草，我确认", fixed: "固定正文，我确认", inbox: "只整理消息", off: "不处理" }[prefs.reply.default.mode] || "按设置处理"}`],
@@ -220,6 +223,7 @@ export function buildView(name, state, args = {}) {
     if (!d) {
       throw new Error("这条记录不存在或已清理。");
     }
+    if (d.identityMigrationArchived && name !== "draft") throw new Error("授权变更前的草稿仅供查看，请打开回复详情。");
     view.title = { draft: "回复详情", edit: "修改回复", regenerate: "重新起草", pause: "暂停此会话" }[name];
     const bodyTitle = !d.text ? "回复状态" : ({ sent: "已发送", sending: "正在发送", unknown: "发送结果待核实",
       pending: "将以你的身份回复" }[d.status] ?? "回复草稿") + " · 完整正文";

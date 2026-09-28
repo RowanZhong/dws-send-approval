@@ -40,7 +40,7 @@
 /* Uses the same content model as the new DingTalk card; external text is literal. */
 .description{white-space:normal}.preview-status{display:inline-block;font-weight:650;color:#12684f;background:#edf8f2;border-radius:6px;padding:4px 10px;margin-bottom:12px}.preview-summary{margin:0 0 16px;padding:0;list-style:none;color:#627082}.preview-summary li{margin:3px 0;font-size:12px}.preview-section{border-top:1px solid #e4eaf0;padding:14px 0 3px;scroll-margin:0}.preview-section h4{font-size:13px;color:#243d52;margin:0 0 8px!important;line-height:1.6}.preview-section p{margin:0 0 12px;white-space:pre-wrap;line-height:1.85;overflow-wrap:anywhere}.preview-notice{margin:12px 0 0;padding:10px 12px;border-left:3px solid #d49b35;border-radius:0 6px 6px 0;background:#fff7e8;color:#74591e;white-space:pre-wrap;font-size:12px}.actions button.primary{background:#176bdd;color:#fff}.actions{gap:6px}.actions button{font-size:13px;font-weight:500}.demo #page-picker{margin:8px 0 12px}.preview-status+.preview-section{margin-top:4px}
 </style></head><body data-guide="developer"><header><div class="edition">FIELD GUIDE / 2026.09 · 使用与部署指南</div><div class="eyebrow">DINGTALK · PERSONAL REPLY ASSISTANT</div><h1>钉钉个人代回复助手<br>技术方案与安装配置</h1><p>面向开发人员与平台管理员：架构、部署、身份绑定、模板发布、验证与运维。</p><div class="badges"><span>main · 双版必要真机验收完成</span><span>OpenClaw 2026.7.1-2 / 2026.8.1</span><span>默认关闭监听</span><span>开发与运维</span></div><div class="journey"><div><b>01 · 理清边界</b><small>架构与可信身份</small></div><div><b>02 · 统一部署</b><small>配置模板与员工隔离</small></div><div><b>03 · 可复核交付</b><small>测试、性能与运维</small></div></div></header><div class="layout"><aside><strong>CONTENTS · 阅读导航</strong><a href="#sec-1">1. 整体方案与定向控制原理 </a><a href="#sec-2">2. 技术架构与边界 </a><a href="#sec-3">3. 管理员安装、升级和卡片模板 </a><a href="#sec-4">4. 配置项从哪里来 </a><a href="#sec-5">5. 15000 个 Pod 的统一部署 </a><a href="#sec-6">6. 独立维护边界 </a><a href="#sec-7">7. 验证、性能与交付状态 </a><a href="#sec-8">8. 卡片协议、组件与发布验收 </a><a href="#sec-9">9. 开发、打包与交付 </a></aside><main><nav class="doc-switch"><a href="../user/dws-reply-assistant-manual.html">员工使用手册 ↗</a><a href="#sec-1">从第一节开始 ↓</a></nav><article>
-<p><strong>开发及运维指南 · main 已更新 · 2026-09-28 · 双版必要真机验收完成</strong></p>
+<p><strong>开发及运维指南 · 2026-09-29 · 公司授权应用迁移双宿主隔离验收通过</strong></p>
 <p>面向开发人员和平台管理员。员工操作另见<a href="./../user/dws-reply-assistant-manual.html">员工使用手册</a>。适用一名员工一个 Pod、独立 OpenClaw 实例；兼容验证覆盖 OpenClaw 2026.7.1-2 与 2026.8.1。</p>
 <section class="doc-section" id="sec-1"><h2 id="_1-整体方案与定向控制原理" tabindex="-1">1. 整体方案与定向控制原理 <a class="header-anchor" href="#_1-整体方案与定向控制原理" aria-label="Permalink to &quot;1. 整体方案与定向控制原理&quot;">&ZeroWidthSpace;</a></h2>
 <p>这套方案为每名员工的独立 OpenClaw 实例增加一条<strong>受控的个人消息处理流程</strong> ：DWS 用员工已登录的身份接收消息，自定义插件按员工设置筛选来源、识别消息主题、生成草稿并管理授权，社区钉钉插件负责投递卡片和接收本人操作。员工可以确认后发送，也可以提前授权有范围、有期限的固定答复。平台统一部署代码和配置模板，员工自己的身份、监听偏好与状态保留在各自 Pod 的持久化目录中。</p>
@@ -606,8 +606,119 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <p>第一个只读取内存状态，不启动 CLI，显示员工、profile、机器人应用和已解析的开放 ID、查询时间与缓存来源；第二个立即回复“已开始后台身份检测”，后台检测后再用第一个查看结果。两者都校验本人身份、钉钉账号及私聊来源，不能在群聊、Web 或其他员工会话冒用。未登录时也可以查看此状态入口；需要登录的员工完成 DWS 授权后再刷新。</p>
 <h3 id="已登录但账号信息不完整" tabindex="-1">已登录但账号信息不完整 <a class="header-anchor" href="#已登录但账号信息不完整" aria-label="Permalink to &quot;已登录但账号信息不完整&quot;">&ZeroWidthSpace;</a></h3>
 <p>“DWS 已登录”与“助手已验证完整绑定”是两项检查。DWS profile 元数据缺少组织 ID（corpId）、用户 ID（userId）或授权应用 ID（clientId）时，助手会明确列出缺失或格式异常的字段，保留个人数据并停止初始化。DWS 授权应用 ID 与社区机器人的 clientId 含义不同，不能互相替代。</p>
-<p>只有本人手动 <code>/dws identity refresh</code>，且当前账号唯一、组织和用户有效、与实例主人及显式 profile 配置一致、仅缺少 clientId 时，才执行一次 <code>dws auth status --profile CORP_ID:USER_ID --format json</code>。插件校验返回的组织、用户和有效凭据，再读取一次 profile。字段恢复完整后仍需通过原身份缓存的全部绑定校验，才能继续初始化。正常启动、普通 <code>/dws</code> 重试、健康账号刷新均不增加认证检查，也没有后台轮询或自动反复尝试。</p>
+<p>只有本人手动 <code>/dws identity refresh</code>，且当前账号唯一、组织和用户有效、与实例主人及显式 profile 配置一致、仅缺少 clientId 时，才执行一次 <code>dws auth status --profile CORP_ID:USER_ID --format json</code>。插件校验返回的组织、用户和有效凭据，再读取一次 profile。字段恢复完整后仍需通过原身份缓存的全部绑定校验，才能继续初始化。未配置公司授权策略时，正常启动、普通 <code>/dws</code> 重试、健康账号刷新均不增加认证检查，也没有后台轮询或自动反复尝试。</p>
 <p>DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可能缺少 profile 的 clientId。此时会提示“DWS 登录有效，但账号信息仍缺少授权应用 ID”，请管理员在 <strong>Gateway 的同一运行用户、配置目录和密钥环境</strong> 对当前账号重新授权，然后刷新。无需先退出所有账号。插件不会登录、登出、切换账号、读取令牌文件或猜测缺失 ID；旧缓存也不能充当当前身份的证明。如果认证检查报告密钥或钥匙串问题，应先保留凭据并修复运行环境。恢复后若授权应用发生变化，仍按原绑定迁移流程处理，不能直接覆盖 identity.json。</p>
+<h3 id="公司统一-dws-授权应用-集中下发、每实例自动迁移" tabindex="-1">公司统一 DWS 授权应用：集中下发、每实例自动迁移 <a class="header-anchor" href="#公司统一-dws-授权应用-集中下发、每实例自动迁移" aria-label="Permalink to &quot;公司统一 DWS 授权应用：集中下发、每实例自动迁移&quot;">&ZeroWidthSpace;</a></h3>
+<p>适用于 OpenClaw <strong>2026.7.1-2、2026.8.1</strong>，两版的助手配置完全相同。公司从员工各自的旧 DWS 应用切换到统一应用时，在原有 <code>plugins.entries[&quot;dws-send-approval&quot;].config</code> 中增加以下字段，保留其余配置：</p>
+<figure class="code-block"><figcaption>JSON 配置</figcaption><pre tabindex="0" aria-label="JSON 配置"><code>{
+  &quot;identityPolicy&quot;: {
+    &quot;requiredDwsClientId&quot;: &quot;COMPANY_DWS_CLIENT_ID&quot;,
+    &quot;allowExistingBindingMigration&quot;: true
+  }
+}
+</code></pre></figure>
+<p><code>COMPANY_DWS_CLIENT_ID</code> 替换为公司指定的 <strong>DWS OAuth 应用 ID</strong>，不是 <code>channels.dingtalk.clientId</code>（审批机器人应用）。插件不需要也不接受 <code>client-secret</code>；公司登录入口负责授权参数和凭据。此策略仅支持默认助手模式，不能同时配置 <code>assistant.enabled:false</code> 的旧自主执行路径。</p>
+<div class="table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0"><table>
+<thead>
+<tr>
+<th>字段</th>
+<th>默认与生命周期</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>requiredDwsClientId</code></td>
+<td>默认未设置；公司完成切换后长期保留</td>
+<td>只允许已授权给该 DWS 应用的账号运行助手</td>
+</tr>
+<tr>
+<td><code>allowExistingBindingMigration</code></td>
+<td>默认 <code>false</code>；迁移阶段设 <code>true</code>，全员完成后统一关闭</td>
+<td>允许从各 Pod 自己保存的历史绑定迁移到目标应用；不需要收集不同员工的旧 client-id</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>未设置公司策略的实例保持原流程。</strong> 仅设置目标 ID 不等于授权迁移。已有目标绑定不会因反复刷新、重启或后来关闭迁移开关再次撤销授权。以后升级仍保留这两个配置项；它们不是下个版本就删除的一次性参数。迁移开关关闭后尚未迁移的离线 Pod 会等待管理员重新安排迁移，不应只按当前在线人数认定“全员完成”。</p>
+<h4 id="员工所处状态与实际行为" tabindex="-1">员工所处状态与实际行为 <a class="header-anchor" href="#员工所处状态与实际行为" aria-label="Permalink to &quot;员工所处状态与实际行为&quot;">&ZeroWidthSpace;</a></h4>
+<div class="table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0"><table>
+<thead>
+<tr>
+<th>当前状态</th>
+<th>助手行为</th>
+<th>下一步</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>从未登录或已退出</td>
+<td>等待 DWS 登录，不处理消息，保留已有数据</td>
+<td>员工通过公司入口授权后再发 <code>/dws</code></td>
+</tr>
+<tr>
+<td>仍登录旧应用 A/B/C，包含旧应用凭据已过期</td>
+<td>显示“公司授权方式已更新”，暂停处理与自动发送</td>
+<td>按指引通过公司入口重新授权</td>
+</tr>
+<tr>
+<td>已登录目标应用，访问令牌过期但 refresh token 有效</td>
+<td>由 DWS 续期；真实身份查询成功后继续</td>
+<td>无需员工逐 Pod 执行迁移脚本</td>
+</tr>
+<tr>
+<td>目标应用凭据撤销、失效或无法读取</td>
+<td>等待重新授权或报告凭据环境问题，原数据保留</td>
+<td>重新授权；密钥/目录问题由管理员处理，不能删除原凭据碰运气</td>
+</tr>
+<tr>
+<td>新用户、目标应用有效、没有历史助手状态</td>
+<td>正常首次初始化，监听默认关闭</td>
+<td>员工自行配置范围并启用</td>
+</tr>
+<tr>
+<td>旧用户、目标应用有效、仅应用 ID 变化</td>
+<td>迁移开关开启且核验通过后自动迁移</td>
+<td>核对保留的设置；按需重新确认自动发送授权</td>
+</tr>
+<tr>
+<td>已完成目标应用绑定</td>
+<td>正常启动，不重复迁移</td>
+<td>无须重复授权已重新确认的规则</td>
+</tr>
+<tr>
+<td>组织、员工、机器人、配置目录也变化，或历史绑定缺失但业务数据仍在</td>
+<td>停在“应用迁移待核实”，不覆盖状态</td>
+<td>管理员处理异常实例，不自动按姓名映射或丢掉排除规则</td>
+</tr>
+</tbody>
+</table></div>
+<p>公司旧应用提示使用统一文案：</p>
+<blockquote>
+<p><strong>公司授权方式已更新</strong></p>
+<p>你当前仍使用旧的 DWS 授权，需要通过公司统一入口重新授权。</p>
+<p>原有设置、草稿和历史记录已保留。完成授权前，助手暂不处理消息或自动发送回复。</p>
+<p>**下一步：**通过公司统一入口完成授权（发送指令：请退出并重新登录dws），然后回到这里再次发送 <code>/dws</code>。</p>
+</blockquote>
+<p>提示使用已有卡片模板；没有操作按钮，不代员工执行登录或退出。卡片投递失败时返回相同文案。公司必须保证入口确实使用新应用参数；插件不会接管主 Agent 对“请退出并重新登录dws”的处理。完成授权后，<code>/dws</code> 会重新检查并接续迁移，无需再次重启 Pod。<code>/dws identity refresh</code> 也可以重新核实。停用期间收到的历史消息不会自动补发。</p>
+<h4 id="保存、核实与中断恢复" tabindex="-1">保存、核实与中断恢复 <a class="header-anchor" href="#保存、核实与中断恢复" aria-label="Permalink to &quot;保存、核实与中断恢复&quot;">&ZeroWidthSpace;</a></h4>
+<p>每个实例在本地 <code>identity.json</code> 中冻结自己的旧来源绑定，只允许应用 ID 单向变成配置目标。保留原员工、组织/profile、社区机器人、账号和 DWS 配置目录的一致性要求。重新查询本人、机器人及已保存规则中的人员/群/暂停会话；人员必须有唯一的已保存 UserId，且新授权查询出的开放 ID 与原规则一致。开放 ID 变化、缺少稳定 ID、群不可访问、待结束的 Agent 任务或无法核实的旧自主任务记录，均暂停整个助手等待核对。不会偷偷删掉“不处理”规则或扩大来源范围。</p>
+<p>核实后先创建 <code>app-migration-backup-&lt;目标ID摘要&gt;/</code>，其中包含旧身份、个人偏好、来源记录及 SQLite 一致性快照（不会遗漏 WAL 中已提交内容）；再在一个事务里保护发送状态，最后切换身份绑定。<code>app-migration-&lt;目标ID摘要&gt;.json</code> 保存进度。备份和迁移记录存放于原助手状态目录，权限分别为目录 0700、文件 0600。备份包含员工消息内容，沿用公司状态卷访问控制；迁移不自动删除备份，验收和公司保留期限满足后再由平台清理，勿打进镜像或安装包。</p>
+<ul>
+<li><strong>保留：</strong> 监听开关、范围、回复设置、主题内容、固定正文、处理记录、冷却与去重信息。</li>
+<li><strong>需要重新确认：</strong> 普通固定自动授权及主题自动授权暂停，正文和规则仍可编辑。员工在新卡片内重新核对期限、范围和频率后授权；不静默沿用旧发送权限。</li>
+<li><strong>旧草稿和卡片：</strong> 未完成草稿转为只读归档；发送中转为结果未知，已有未知结果保持不明且不重发。旧卡片停用并提示发送 <code>/dws</code>，新卡可以查看保留的数据。归档正文仍遵循已有存储保留期限，不是永久保存。</li>
+<li><strong>恢复：</strong> 重启或再次 <code>/dws</code> 接续检查；已完成步骤不重复撤销新授权。数据、备份或来源冲突时停止，不能用清空状态、覆盖 identity.json、改写旧应用 ID 的方式“修复”。</li>
+</ul>
+<p>迁移需保持每份状态卷只有一个活动 Gateway。若发现遗留迁移锁，锁以完整文件原子落盘；代码在记录的进程已不存在，或 Pod 重启复用了本进程 PID 但进程实例标识不同的时候接续；无法确定进程归属时保持暂停。若管理员确认异常后人工处理，应先停实例并保留全部状态供核对。<strong>已有发送发生后，不能直接整库回滚到迁移前备份</strong>，否则可能丢失发送/去重记录；需要核对并保留迁移后的发送事实。</p>
+<h4 id="_15000-pod-的发布与观察" tabindex="-1">15000 Pod 的发布与观察 <a class="header-anchor" href="#_15000-pod-的发布与观察" aria-label="Permalink to &quot;15000 Pod 的发布与观察&quot;">&ZeroWidthSpace;</a></h4>
+<ol>
+<li>公司先验证新应用的权限、机器人查询、人员及群访问、登录入口；保留原状态卷和现有配置。选择不同员工状态的小批 Pod 灰度，不能只测刚安装的新用户。</li>
+<li>统一下发目标应用 ID 和迁移开关并滚动重启。每实例启动查询随机错开 0.1–30.1 秒，目标核实并发最多 2、规则目标最多 600，迁移初始化预算 120 秒；网络临时错误最多两次退避重试。平台仍应限制批次规模，根据 DWS 限流与实际耗时调整，不应一次重启全部 Pod。</li>
+<li>原来未登录/旧应用的员工按卡片指引自行授权；原来已登录目标应用的员工自动迁移。无须管理员逐 Pod 输入旧 client-id 或运行迁移命令。</li>
+<li>使用现有集中日志收集 <code>[DWSIdentity] state=...</code>，并读取实例的迁移状态文件核对 <code>pending/backed_up/complete</code>；员工可用 <code>/dws identity</code> 自查。代码没有内置公司级管理后台或 15000 实例汇总平台。统计完成、等待登录、等待公司授权、需人工核对及长期离线实例，只处理异常名单。</li>
+<li>覆盖离线员工并确认完成后统一设置 <code>allowExistingBindingMigration:false</code>，保留 <code>requiredDwsClientId</code> 和状态卷内的完成记录。</li>
+</ol>
+<p>公司策略启用后，初始化增加一次 <code>auth status</code> 验证；已就绪的 <code>/dws</code>、消息接入及实际发送前也检查当前 profile，防止缓存掩盖员工重新授权导致的变化。无固定周期登录轮询；不阻塞 Gateway 服务启动。员工数据量影响本地一致性检查和备份耗时，需给状态卷预留至少一份数据库快照的空间。真实新公司应用的权限及企业级限流必须由灰度验证，本地双宿主验收不代表已测试 15000 Pod 容量。</p>
 <h3 id="单实例配置" tabindex="-1">单实例配置 <a class="header-anchor" href="#单实例配置" aria-label="Permalink to &quot;单实例配置&quot;">&ZeroWidthSpace;</a></h3>
 <p>下面文件是合并片段，保留原有 channels、agents、Web 权限及其他插件配置。<code>approvals.plugin</code> 用于兼容旧审批；不要覆盖其他插件现有的审批目标。</p>
 <figure class="code-block"><figcaption>JSON 配置</figcaption><pre tabindex="0" aria-label="JSON 配置"><code>{
@@ -694,6 +805,8 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <h3 id="当前-main-的配置与验收范围" tabindex="-1">当前 main 的配置与验收范围 <a class="header-anchor" href="#当前-main-的配置与验收范围" aria-label="Permalink to &quot;当前 main 的配置与验收范围&quot;">&ZeroWidthSpace;</a></h3>
 <p>本轮功能与身份修复已通过两版必要真机验收，并已推送 GitHub main，代码基线为 <code>6662d54</code>。专用 Agent 的两版完整配置、路由、启用验证和排错见<a href="#draft-agent-setup">第 3 节</a>；参数、模板迁移及接口限制见<a href="read-only-drafting.md">只读起草能力与限制</a>。完整证据与未覆盖范围见 <a href="../plans/2026-09-28-development-record.md">2026-09-28 执行记录</a>及<a href="../plans/2026-09-28-identity-recovery.md">身份修复记录</a>。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。当前包版本仍为 <code>0.8.0</code>，本次没有另发新版本标签，部署应记录实际 Git 提交并从对应源码打包。</p>
 </section><section class="doc-section" id="sec-7"><h2 id="_7-验证、性能与交付状态" tabindex="-1">7. 验证、性能与交付状态 <a class="header-anchor" href="#_7-验证、性能与交付状态" aria-label="Permalink to &quot;7. 验证、性能与交付状态&quot;">&ZeroWidthSpace;</a></h2>
+<h3 id="公司统一授权应用迁移-2026-09-29" tabindex="-1">公司统一授权应用迁移（2026-09-29） <a class="header-anchor" href="#公司统一授权应用迁移-2026-09-29" aria-label="Permalink to &quot;公司统一授权应用迁移（2026-09-29）&quot;">&ZeroWidthSpace;</a></h3>
+<p>全量 414 项测试及两版实际 SDK 矩阵通过；两版钉钉桌面真实 <code>/dws</code> 提示、迁移、新卡回调及旧草稿只读均已验证。旧应用绑定为合成数据，目标使用本机既有真实授权；不代表已核实公司新应用权限或 15000 Pod 压力。范围、限制与中断测试见<a href="../plans/2026-09-29-company-app-migration.md">执行记录</a>。</p>
 <h3 id="_0-8-0-独立项目抽离验收-2026-09-27" tabindex="-1">0.8.0 独立项目抽离验收（2026-09-27） <a class="header-anchor" href="#_0-8-0-独立项目抽离验收-2026-09-27" aria-label="Permalink to &quot;0.8.0 独立项目抽离验收（2026-09-27）&quot;">&ZeroWidthSpace;</a></h3>
 <ul>
 <li>两版宿主各 <strong>302 项</strong>测试通过，包含原业务回归及 13 项卡片接口和迁移测试。实际安装的两版 SDK 均完成命令注册、权限控制、主会话执行通道、无工具模型调用及启动隔离检查。</li>

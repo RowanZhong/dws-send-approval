@@ -32,6 +32,7 @@ const scopeName = (scope) =>
 const back = (label, op, extra) => button(`返回${label}`, op, extra);
 export function buildConfigView(name, state, args, view, input) {
   const { prefs, settings, directory } = state;
+  const authorization = (r) => r.appMigrationPaused ? "公司授权应用已更新，请编辑规则并重新确认自动发送授权。" : `授权${r.expires > Date.now() ? "有效至" : "已到期"}：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone })}`;
   const targetLabel = (kind, ids) =>
     ids.map((id) => directory.find((x) => x.kind === kind && x.id === id)?.name || id).join("、");
   if (name === "reply") {
@@ -122,11 +123,11 @@ export function buildConfigView(name, state, args, view, input) {
     if (!r) { view.description = "规则已变化，请返回重新选择。"; view.buttons = [back("固定回复", "fixed-replies")]; return view; }
     view.description = [`发送方式：${r.delivery === "auto" ? "授权自动发送" : "每条由我确认"}`, `范围：${r.name || scopeName(r.scope)}${r.target ? " · " + r.target : ""}`,
       `关键词：${r.keywords.join("、") || "不限制"}`, `完整正文：\n${r.text}`,
-      r.delivery === "auto" ? `授权${r.expires > Date.now() ? "有效至" : "已到期"}：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone })}\n同一会话间隔：${r.cooldownMinutes} 分钟` : "没有自动发送授权。",
+      r.delivery === "auto" ? `${authorization(r)}\n同一会话间隔：${r.cooldownMinutes} 分钟` : "没有自动发送授权。",
       "修改范围、正文或发送方式后，需要重新查看并确认。"].join("\n\n");
-    view.content = { status: r.delivery === "auto" ? r.expires > Date.now() ? "授权自动发送" : "自动授权已到期" : "每条由我确认",
+    view.content = { status: r.delivery === "auto" ? r.appMigrationPaused ? "需要重新授权" : r.expires > Date.now() ? "授权自动发送" : "自动授权已到期" : "每条由我确认",
       summary: [`范围：${r.name || scopeName(r.scope)}${r.target ? " · " + r.target : ""}`, `关键词：${r.keywords.join("、") || "不限制"}`],
-      sections: [{ title: "完整固定正文", text: r.text }, { title: "授权", text: r.delivery === "auto" ? `截止：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone })}\n同一会话间隔：${r.cooldownMinutes} 分钟` : "没有自动发送授权。" }],
+      sections: [{ title: "完整固定正文", text: r.text }, { title: "授权", text: r.delivery === "auto" ? `${authorization(r)}\n同一会话间隔：${r.cooldownMinutes} 分钟` : "没有自动发送授权。" }],
       notices: ["修改范围、正文或发送方式后，需要重新查看并确认。"] };
     view.buttons = [button("编辑规则", "fixed-edit"), ...(["auto", "confirm"].includes(r.source) ? [button("撤销规则", "fixed-remove")] : []), back("固定回复", "fixed-replies")];
   } else if (name === "fixed-new") {
@@ -148,7 +149,7 @@ export function buildConfigView(name, state, args, view, input) {
       (rows
         .map(
           (r, i) =>
-            `${i + 1}. ${label(r)}\n${r.expires > Date.now() ? "有效至" : "已到期"} ${new Date(r.expires).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}\n正文：${r.text}`,
+            `${i + 1}. ${label(r)}\n${authorization(r)}\n正文：${r.text}`,
         )
         .join("\n\n") || "尚未授权自动答复。");
     view.fields = rows.length

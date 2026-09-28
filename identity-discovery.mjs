@@ -103,17 +103,12 @@ export const sameBinding = (a, b) =>
   b &&
   Object.keys(b).every((k) => a[k] === b[k]) &&
   Object.keys(a).length === Object.keys(b).length;
-export async function readIdentity(stateDir, binding) {
+export async function readSavedIdentity(stateDir) {
   try {
     const file = await readFile(join(stateDir, "dws-send-approval", "identity.json"), "utf8");
     if (file.length > 65536) bad("身份缓存异常，请管理员检查；未覆盖原数据。");
     const saved = JSON.parse(file);
     if (saved.version !== 1 || !saved.binding) bad("身份缓存版本或格式无效。");
-    if (!sameBinding(saved.binding, binding))
-      throw new IdentityError(
-        "account_mismatch",
-        "员工、DWS 授权应用或社区机器人绑定已变化，请管理员核对数据后迁移；原数据保留。",
-      );
     if (
       saved.robot &&
       (!validName(saved.robot.name) ||
@@ -125,10 +120,17 @@ export async function readIdentity(stateDir, binding) {
       bad("本人开放 ID 缓存无效。");
     return saved;
   } catch (error) {
-    if (error.code === "ENOENT") return { version: 1, binding };
+    if (error.code === "ENOENT") return undefined;
     if (error instanceof IdentityError) throw error;
     throw new IdentityError("failed", "身份缓存无法读取，请检查文件与权限；原数据保留。");
   }
+}
+export async function readIdentity(stateDir, binding) {
+  const saved = await readSavedIdentity(stateDir);
+  if (!saved) return { version: 1, binding };
+  if (!sameBinding(saved.binding, binding))
+    throw new IdentityError("account_mismatch", "员工、DWS 授权应用或社区机器人绑定已变化，请管理员核对数据后迁移；原数据保留。");
+  return saved;
 }
 export async function writeIdentity(stateDir, record, signal) {
   if (signal?.aborted) throw cancelled();

@@ -40,6 +40,16 @@ export function readConfig(raw = {}, { discovery = false } = {}) {
     timeoutMs: 120_000,
     ...raw,
   };
+  const identityPolicy = raw.identityPolicy === undefined ? {} : raw.identityPolicy;
+  if (!identityPolicy || typeof identityPolicy !== "object" || Array.isArray(identityPolicy) ||
+      Object.keys(identityPolicy).some((key) => !["requiredDwsClientId", "allowExistingBindingMigration"].includes(key)) ||
+      (identityPolicy.requiredDwsClientId !== undefined &&
+        (typeof identityPolicy.requiredDwsClientId !== "string" || !TOKEN.test(identityPolicy.requiredDwsClientId))) ||
+      (identityPolicy.allowExistingBindingMigration !== undefined && typeof identityPolicy.allowExistingBindingMigration !== "boolean") ||
+      (identityPolicy.allowExistingBindingMigration && !identityPolicy.requiredDwsClientId)) {
+    throw new Error("identityPolicy requires a valid requiredDwsClientId and a boolean allowExistingBindingMigration");
+  }
+  config.identityPolicy = Object.freeze({ allowExistingBindingMigration: false, ...identityPolicy });
   const assistant = {
     enabled: true,
     draftTtlMinutes: 1440,
@@ -172,6 +182,8 @@ export function readConfig(raw = {}, { discovery = false } = {}) {
       "all-direct requires ignoreSenderOpenIds including the approval bot, to avoid notification loops",
     );
   }
+  if (config.identityPolicy.requiredDwsClientId && !config.assistant.enabled)
+    throw new Error("公司授权策略仅支持助手模式；不能与 assistant.enabled:false 的旧自主执行模式同时启用。");
   return Object.freeze({
     ...config,
     listener: Object.freeze({
