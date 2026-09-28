@@ -26,7 +26,7 @@ const labels = {
   filtered: "已过滤",
   pending: "待确认",
   inbox: "仅整理",
-  stale: "有新消息，需刷新",
+  stale: "需要重新核对",
   "draft-error": "起草失败",
   sending: "发送中",
   sent: "已发送",
@@ -37,6 +37,7 @@ const labels = {
   suppressed: "频率限制，本次未发",
 };
 export function draftStatusLabel(d) {
+  if (d.status === "stale" && d.ownerReplyAt > (d.ownerReplyReviewedAt ?? 0)) return "你已回复，需再次确认";
   return d.status === "draft-error" && d.errorCode === "PROCESS_INTERRUPTED" ? "处理被中断" : labels[d.status] || "待核实";
 }
 export function draftBodyLabel(d) {
@@ -46,6 +47,7 @@ export function draftBodyLabel(d) {
   if (d.status === "classifying") return "正在识别主题，随后按设置处理。";
   if (d.status === "filtered") return "按“只关注指定主题”设置过滤，不生成回复。";
   if (d.status === "draft-error") return "起草未成功，可重试起草或手动填写。";
+  if (d.status === "stale") return "暂无回复正文，请核对最新消息后生成草稿。";
   if (["expired", "superseded", "ignored", "suppressed"].includes(d.status)) return "本条已结束处理。";
   return "暂无回复正文，可查看状态后手动填写。";
 }

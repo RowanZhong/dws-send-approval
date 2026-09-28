@@ -37,6 +37,9 @@ export function buildConfigView(name, state, args, view, input) {
   if (name === "reply") {
     view.title = "回复方式";
     view.description = `默认：${modes.find(([value]) => value === prefs.reply.default.mode)?.[1]}\n人员专属规则：${prefs.reply.users.length}项\n群专属规则：${prefs.reply.groups.length}项\n\n优先级：不处理 > 人员 > 群 > 默认。\n这里只设置处理方式，自动发送需单独授权。`;
+    view.content = { status: modes.find(([v]) => v === prefs.reply.default.mode)?.[1], summary: [`人员专属规则：${prefs.reply.users.length} 项`, `群专属规则：${prefs.reply.groups.length} 项`],
+      sections: [{ title: "处理方式的区别", text: "AI 起草：生成回复，由你确认发送。\n固定回复：使用已保存正文，选择逐条确认或授权自动发送。\n只整理消息：进入待处理，不生成回复。\n不处理：不进入回复流程。" }],
+      notices: ["优先级：不处理 > 人员 > 群 > 默认。自动发送必须有有效授权。"] };
     view.buttons = [
       button("修改默认规则", "reply-edit", { targetKind: "default" }),
       button("设置指定人员", "reply-target", { targetKind: "user" }),
@@ -121,6 +124,10 @@ export function buildConfigView(name, state, args, view, input) {
       `关键词：${r.keywords.join("、") || "不限制"}`, `完整正文：\n${r.text}`,
       r.delivery === "auto" ? `授权${r.expires > Date.now() ? "有效至" : "已到期"}：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone })}\n同一会话间隔：${r.cooldownMinutes} 分钟` : "没有自动发送授权。",
       "修改范围、正文或发送方式后，需要重新查看并确认。"].join("\n\n");
+    view.content = { status: r.delivery === "auto" ? r.expires > Date.now() ? "授权自动发送" : "自动授权已到期" : "每条由我确认",
+      summary: [`范围：${r.name || scopeName(r.scope)}${r.target ? " · " + r.target : ""}`, `关键词：${r.keywords.join("、") || "不限制"}`],
+      sections: [{ title: "完整固定正文", text: r.text }, { title: "授权", text: r.delivery === "auto" ? `截止：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: settings.notifications.timezone })}\n同一会话间隔：${r.cooldownMinutes} 分钟` : "没有自动发送授权。" }],
+      notices: ["修改范围、正文或发送方式后，需要重新查看并确认。"] };
     view.buttons = [button("编辑规则", "fixed-edit"), ...(["auto", "confirm"].includes(r.source) ? [button("撤销规则", "fixed-remove")] : []), back("固定回复", "fixed-replies")];
   } else if (name === "fixed-new") {
     view.title = "固定回复 · 发送方式";
@@ -197,7 +204,7 @@ export function buildConfigView(name, state, args, view, input) {
       ];
       view.buttons = [button(confirm ? "下一步：检查规则" : "下一步：授权期限", "auto-next"), previous("auto-new"), cancel];
     } else if (name === "auto-limits") {
-      view.title = "自动答复 · 3/5 授权期限";
+      view.title = "固定回复 · 3/5 授权期限";
       view.description = "最终确认后开始计时，到期停止自动答复。";
       view.fields = [
         select(
@@ -214,7 +221,7 @@ export function buildConfigView(name, state, args, view, input) {
       ];
       view.buttons = [button("下一步：发送频率", "auto-next"), previous("auto-content"), cancel];
     } else if (name === "auto-frequency") {
-      view.title = "自动答复 · 4/5 发送频率";
+      view.title = "固定回复 · 4/5 发送频率";
       view.description = "避免连续打扰同一会话。每实例每小时最多自动发送30条。";
       view.fields = [
         select(
@@ -246,17 +253,23 @@ export function buildConfigView(name, state, args, view, input) {
         .filter(Boolean)
         .join("\n\n");
       view.buttons = [button(confirm ? "保存逐条确认规则" : "确认授权自动发送", "save-auto"), previous(confirm ? "auto-content" : "auto-frequency"), cancel];
+      view.content = { status: confirm ? "待保存 · 每条确认" : "待授权 · 自动发送", summary: [`范围：${scopeName(draft.scope)}`, ...(draft.targets?.length ? [`对象：${draft.targets.map((x) => `${x.name}（${x.userId || x.id}）`).join("、")}`] : [])],
+        sections: [{ title: "完整正文", text: draft.answer || "" }, { title: "匹配条件", text: `关键词：${draft.keywords || "不限制"}` },
+          { title: "发送授权", text: confirm ? "每条由你确认后发送。保存规则不会授权自动发送。" : `有效期：${draft.hours} 小时\n同一会话间隔：${draft.cooldown} 分钟\n确认后将以你的身份自动发送以上固定正文。` }],
+        notices: ["同一消息若命中相互冲突的固定回复规则，将转为人工处理。"] };
     }
   } else if (name === "notifications") {
     const n = settings.notifications;
     view.title = "提醒设置";
     view.description = `提醒方式：${{ digest: "定时汇总", immediate: "即时提醒", manual: "仅主动查看" }[n.mode]}\n汇总间隔：${n.minutes}分钟\n免打扰：${n.quietStart === n.quietEnd ? "关闭" : `${n.quietStart}–${n.quietEnd}`}\n时区：${n.timezone}\n重点联系人：${n.priorityUsers.length}人\n\n提醒设置不影响已授权的自动发送。`;
+    view.content = { status: { digest: "定时汇总", immediate: "即时提醒", manual: "仅主动查看" }[n.mode], summary: [`汇总间隔：${n.minutes} 分钟`, `重点联系人：${n.priorityUsers.length} 人`],
+      sections: [{ title: "免打扰", text: `${n.quietStart === n.quietEnd ? "关闭" : `${n.quietStart}–${n.quietEnd}`}\n时区：${n.timezone}` }], notices: ["关闭提醒不会停止已授权的自动发送。"] };
     view.buttons = [
       button("提醒方式", "notice-delivery"),
       button("汇总间隔", "notice-frequency"),
       button("免打扰时段", "notice-quiet"),
       button("重点联系人", "notice-priority"),
-      back("自动答复与提醒", "automation"),
+      back("固定回复与提醒", "automation"),
     ];
   } else if (
     ["notice-delivery", "notice-frequency", "notice-quiet", "notice-priority"].includes(name)
@@ -271,6 +284,11 @@ export function buildConfigView(name, state, args, view, input) {
     if (name === "notice-delivery") {
       view.description =
         "即时提醒：草稿就绪后约2秒推送；密集来信合并，两次提醒至少间隔10秒。\n定时汇总：按选定间隔提醒；仅主动查看：不主动提醒。\n自动回复成功只记入历史，可通过定时汇总查看。";
+      view.content = { status: "选择接收提醒的方式", summary: [], sections: [
+        { title: "即时提醒", text: "草稿就绪后约 2 秒提醒。密集来信合并，两次提醒至少间隔 10 秒。" },
+        { title: "定时汇总", text: "按设定间隔集中提醒，可包含自动回复成功记录。" },
+        { title: "仅主动查看", text: "不主动提醒，可随时打开助手查看。" }],
+        notices: ["提醒方式不影响已授权的自动发送。"] };
       view.fields = [
         select(
           "mode",

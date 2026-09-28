@@ -1,6 +1,6 @@
 // Topic scopes only narrow the listener's independently authorized sources.
 export const TOPIC_LIMIT = 20;
-export const TOPIC_ACTIONS = { auto: "自动发送固定说明", confirm: "模板由我确认", inbox: "只整理提醒" };
+export const TOPIC_ACTIONS = { auto: "固定回复，授权自动发送", confirm: "固定回复，逐条确认", inbox: "只整理消息" };
 export const TOPIC_REASONS = {
   matched: "主题明确匹配", none: "未明确命中指定主题", ambiguous: "无法明确命中唯一主题",
   partial: "包含其他问题，模板不能完整回应", excluded: "属于主题排除情形",

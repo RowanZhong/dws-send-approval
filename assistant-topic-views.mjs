@@ -16,11 +16,20 @@ export function buildTopicView(name, state, args, view) {
   if (name === "topics") {
     view.title = "消息主题";
     view.description = `主题识别：${topics.enabled ? "已开启" : "已关闭"}\n未明确命中：${topics.mode === "only" ? "只关注指定主题，一律过滤" : "其他消息照常处理，沿用普通回复方式及有效自动授权"}\n主题规则：${topics.rules.length}条\n\n先检查监听来源，再判断主题。明确命中唯一主题才执行该规则；不确定、多个主题或识别异常均按上方设置处理。规则不扩大来源范围。${topics.enabled && topics.mode === "only" && !topics.rules.some((r) => r.enabled) ? "\n\n没有启用的主题：所有来信都将被过滤。" : ""}`;
+    view.content = { status: `主题识别${topics.enabled ? "已开启" : "已关闭"}`, summary: [`已保存 ${topics.rules.length} 条规则`],
+      sections: [{ title: "明确命中唯一主题", text: "执行该主题设置的动作。规则只在已允许的监听范围内生效。" },
+        { title: "未明确命中", text: topics.mode === "only" ? "只关注指定主题：一律不处理。" : "其他消息照常处理：沿用普通回复方式及范围、期限内的自动发送授权。" }],
+      notices: [...(!topics.enabled ? ["当前未开启主题识别，按普通回复方式处理。"] : []),
+        ...(topics.enabled && topics.mode === "only" && !topics.rules.some((r) => r.enabled) ? ["没有启用的主题：所有已监听来信都将被过滤。"] : [])] };
     view.buttons = [button("主题开关与未命中策略", "topic-mode"), button("新增主题规则", "topic-new"),
       button("查看与管理规则", "topic-manage"), button("返回监听范围", "listen")];
   } else if (name === "topic-mode") {
     view.title = "主题开关与未命中策略";
     view.description = "明确命中唯一主题时执行该规则。\n未明确命中（含不确定、多个主题或识别异常）时：\n· 其他消息照常处理：按普通回复方式处理，包括范围与期限内的自动发送授权。\n· 只关注指定主题：一律过滤，不起草、不发送、不创建待办；可能过滤相关但无法明确匹配的消息，原因可在处理记录查看。\n关闭主题识别会恢复普通回复流程；本页不改变监听总开关。";
+    view.content = { status: "选择未明确命中时的处理方式", summary: ["唯一明确命中：执行主题规则"],
+      sections: [{ title: "其他消息照常处理", text: "按普通回复方式处理。已有自动发送授权仍受范围和期限限制。" },
+        { title: "只关注指定主题", text: "未明确命中一律不处理，不起草、不发送、不进入待处理列表。可能漏掉相关但无法明确匹配的消息，原因可在处理记录查看。" }],
+      notices: ["不确定、多个主题或识别异常，都按未明确命中处理。关闭主题识别恢复普通流程，不改变监听总开关。"] };
     view.fields = [select("enabled", "主题识别", [["on", "开启"], ["off", "关闭，恢复原有流程"]], topics.enabled ? "on" : "off"),
       select("mode", "未明确命中的消息", [["fallback", "其他消息照常处理"], ["only", "只关注指定主题"]], topics.mode)];
     view.buttons = [button("保存主题策略", "topic-save-mode"), back];
@@ -29,6 +38,10 @@ export function buildTopicView(name, state, args, view) {
     const rows = topics.rules.slice(page * 3, page * 3 + 3);
     view.title = "主题规则管理";
     view.description = `共${topics.rules.length}条 · 第${page + 1}页\n\n${rows.map(describe).join("\n\n")}\n\n停用后不会匹配本规则，原有回复流程是否继续取决于未命中策略。`;
+    view.content = { status: `共 ${topics.rules.length} 条 · 第 ${page + 1} 页`, summary: [],
+      sections: rows.length ? rows.map((r) => ({ title: `${r.name} · ${r.enabled ? "启用" : "停用"}`,
+        text: `${scopeNames[r.scope]}${r.targets.length ? `：${targets(r)}` : ""}\n${TOPIC_ACTIONS[r.action]}` })) : [{ title: "暂无主题规则", text: "返回消息主题后可新增规则。" }],
+      notices: ["停用后不再匹配本规则，其余消息按未明确命中策略处理。"] };
     view.fields = [select("rules", "选择本页规则", rows.map((r) => [r.id, r.name]), [], true)];
     view.buttons = [...(rows.length ? [button("查看所选第一条", "topic-open"), button("停用所选", "topic-disable"), button("删除所选", "topic-delete")] : []),
       ...(page ? [button("上一页", "topic-manage", { page: page - 1 })] : []),
@@ -38,6 +51,9 @@ export function buildTopicView(name, state, args, view) {
     if (!r) throw new Error("主题已删除，请重新打开规则列表。");
     view.title = "主题规则详情";
     view.description = `${describe(r)}\n\n关注的问题：\n${r.description}\n\n典型问法：\n${r.examples || "未填写"}\n\n不适用情形：\n${r.exclusions || "未填写"}\n\n固定正文：\n${r.text || "只整理，不发送"}${r.action === "auto" ? `\n\n授权${r.expires <= Date.now() ? "已到期" : "有效至"}：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: state.settings.notifications.timezone, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}\n同一会话间隔：${r.cooldownMinutes}分钟` : ""}`;
+    view.content = { status: `${r.name} · ${r.enabled ? "启用" : "停用"}`, summary: [scopeNames[r.scope], ...(r.targets.length ? [targets(r)] : []), TOPIC_ACTIONS[r.action]],
+      sections: [{ title: "关注的问题", text: r.description }, { title: "典型问法", text: r.examples || "未填写" }, { title: "不适用情形", text: r.exclusions || "未填写" },
+        { title: "完整固定正文", text: r.text || "只整理，不发送" }, ...(r.action === "auto" ? [{ title: "自动发送授权", text: `授权${r.expires <= Date.now() ? "已到期" : "有效至"}：${new Date(r.expires).toLocaleString("zh-CN", { timeZone: state.settings.notifications.timezone })}\n同一会话间隔：${r.cooldownMinutes} 分钟` }] : [])], notices: [] };
     view.buttons = [button("编辑与重新启用", "topic-edit", { id: r.id }), button("试判本规则", "topic-test-saved", { id: r.id }), back];
   } else {
     const cancel = button("取消，不保存", "topics");
@@ -64,6 +80,10 @@ export function buildTopicView(name, state, args, view) {
       view.title = w.readOnly ? "试判已保存主题" : "主题规则 · 4/6 模拟试判";
       const result = w.trial;
       view.description = `主题：${w.name}\n仅试判本规则，假定来源满足范围；不验证实际订阅或其他规则冲突，不发送消息。${result ? `\n\n上次提交试判结果：${TOPIC_REASONS[result.reason] || "需本人判断"}${result.outcome === "match" ? `\n拟执行：${TOPIC_ACTIONS[w.action]}\n正文：${w.text || "只整理"}` : "\n不会因本规则自动发送"}` : ""}\n\n修改输入后需再次点击试判。试判不能保证所有问法都识别准确；自动授权前至少试判一条明确匹配的消息。`;
+      view.content = { status: result ? "上次提交的试判结果" : "输入一条消息进行试判", summary: [`主题：${w.name}`],
+        sections: [...(result ? [{ title: TOPIC_REASONS[result.reason] || "未明确命中", text: result.outcome === "match" ? `将执行：${TOPIC_ACTIONS[w.action]}\n${w.action === "inbox" ? "只整理，不生成回复。" : `完整正文：\n${w.text || ""}`}` : "不会执行本规则；实际来信按未明确命中策略处理。" }] : []),
+          { title: "本次试判范围", text: "仅测试当前规则，假定来源符合范围。不验证实际监听或其他规则冲突，不发送消息。" }],
+        notices: ["修改消息后请重新试判。自动授权前至少试判一条明确匹配的消息；试判不保证所有问法都准确。"] };
       view.fields = [text("sample", "模拟收到的消息（最多8000字符）", w.sample || "")];
       view.buttons = [button("试判，不发送", "topic-test"), ...(w.readOnly ? [back] : [button("下一步：期限与频率", "topic-next"), previous("topic-action"), cancel])];
     } else if (name === "topic-limits") {
@@ -76,6 +96,11 @@ export function buildTopicView(name, state, args, view) {
       view.title = "主题规则 · 6/6 确认启用";
       view.description = `主题：${w.name}\n来源：${scopeNames[w.scope]}${w.targetRows?.length ? ` · ${w.targetRows.map((r) => r.name).join("、")}` : ""}\n关注：${w.description}\n典型问法：${w.examples || "未填写"}\n排除：${w.exclusions || "未填写"}\n\n处理：${TOPIC_ACTIONS[w.action]}\n完整正文：\n${w.text || "只整理，不发送"}${w.action === "auto" ? `\n\n授权${w.hours}小时；同一会话间隔${w.cooldown}分钟` : ""}\n\n同时启用主题识别。未命中：${topics.mode === "only" ? "不处理" : "沿用原有回复流程"}。\n监听总开关不改变；主题不能扩大来源范围。`;
       view.buttons = [button(w.action === "auto" ? "确认授权并启用主题" : "确认保存并启用主题", "topic-save"), previous("topic-limits"), cancel];
+      view.content = { status: "核对后启用", summary: [`主题：${w.name}`, `来源：${scopeNames[w.scope]}${w.targetRows?.length ? " · " + w.targetRows.map((r) => r.name).join("、") : ""}`, `处理：${TOPIC_ACTIONS[w.action]}`],
+        sections: [{ title: "适用条件", text: `关注：${w.description}\n典型问法：${w.examples || "未填写"}\n排除：${w.exclusions || "未填写"}` },
+          { title: "完整正文", text: w.text || "只整理，不发送" },
+          { title: "发送授权", text: w.action === "auto" ? `授权 ${w.hours} 小时\n同一会话间隔 ${w.cooldown} 分钟\n确认后将以你的身份自动发送以上固定正文。` : "不授权自动发送。" }],
+        notices: [`同时启用主题识别；未明确命中时${topics.mode === "only" ? "一律不处理" : "按普通回复方式及有效授权处理"}。`, "监听总开关不改变；主题不能扩大来源范围。"] };
     }
   }
   return true;

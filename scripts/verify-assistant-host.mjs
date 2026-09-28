@@ -110,10 +110,14 @@ try {
   assert.match((await invoke("dws", "identity refresh")).text, /后台身份检测/);
   // Cold host imports and child process scheduling can exceed two seconds.
   for (const deadline = Date.now() + 10000; Date.now() < deadline;) {
-    if ((await invoke("dws", "identity")).text.includes("开放 ID：open-fixture")) break;
+    const status = (await invoke("dws", "identity")).text;
+    // Refresh retains the verified bot label while replacing the runtime. Wait
+    // for readiness as well; the cached label alone is not a completion signal.
+    if (status.includes("状态：已就绪") && status.includes("开放 ID：open-fixture")) break;
     await new Promise((r) => setTimeout(r, 20));
   }
   assert.match((await invoke("dws", "identity")).text, /开放 ID：open-fixture/);
+  assert.match((await invoke("dws", "identity")).text, /状态：已就绪/);
   assert.match((await invoke("dws-listen", "status")).text, /已关闭/);
   assert.match((await invoke("dws-listen", "dm all")).text, /私聊：全部/);
   assert.match((await invoke("dws", "list")).text, /暂无/);

@@ -2,10 +2,12 @@
 
 独立维护的钉钉个人代回复助手。员工在自己的机器人私聊中选择监听范围、查看 AI 草稿、修改或批准回复，并为重复问题设置固定答复及主题规则。默认不开启监听，AI 生成正文需本人确认。
 
-**版本 0.8.0** · OpenClaw **2026.7.1-2 / 2026.8.1** · DWS **1.0.58** · Linux/macOS。
+**发布基线 0.8.0；本分支为下一版本候选，双版必要真机验收已完成，待用户验收与发布确认。** · OpenClaw **2026.7.1-2 / 2026.8.1** · DWS **1.0.58** · Linux/macOS。
 
 - [开发人员：技术方案与安装配置](docs/contributor/dws-reply-assistant-deployment.html)
 - [员工：使用手册与场景指引](docs/user/dws-reply-assistant-manual.html)
+- [本轮开发与验收执行记录](docs/plans/2026-09-28-development-record.md)
+- [受限 Agent 起草配置](docs/contributor/read-only-drafting.md)
 - [抽离设计及验收](docs/plans/standalone-extraction.md)
 - [依赖来源与许可证](NOTICE.md)
 
@@ -33,7 +35,7 @@ npm run pack:check
 
 ## 迁移保持什么
 
-插件 ID、配置键、员工状态目录、SQLite 格式和卡片模板保持兼容。旧 `examples/dws-send-approval` 的加载路径替换为本目录，不能重复加载两份。切换卡片接口后旧操作卡停用，重新 `/dws` 即可；草稿、偏好、授权和发送历史保留，不自动开启监听或重发消息。
+插件 ID、已有配置键、员工状态目录和持久化业务数据保持兼容。下一版本富文本模板须单独发布并显式启用展示版本 3；旧卡停用后提供恢复入口，不维持旧卡全部交互。旧 `examples/dws-send-approval` 的加载路径替换为本目录，不能重复加载两份。切换卡片接口后旧操作卡停用，重新 `/dws` 即可；草稿、偏好、授权和发送历史保留，不自动开启监听或重发消息。
 
 上游接口客户端随包包含，业务卡片和状态仍由本项目负责。自动回复绕行的全局安全治理不属于本项目，也不依赖 Agent Aegis 才能运行。
 

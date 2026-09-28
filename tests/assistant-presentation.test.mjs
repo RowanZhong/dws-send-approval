@@ -2,10 +2,46 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { fixture } from "./assistant-fixture.mjs";
-import { literal, excerpt, renderContent, PRESENTATION_PAGES } from "../assistant-card-presentation.mjs";
-import { buildView } from "../assistant-views.mjs";
+import { literal, excerpt, renderContent, textParagraphs, inactiveContent, PRESENTATION_PAGES } from "../assistant-card-presentation.mjs";
+import { buildView, draftStatusLabel, draftBodyLabel } from "../assistant-views.mjs";
 import { initialSettings } from "../assistant-settings.mjs";
 const rich = { assistant: { cardTemplateId: "rich.schema", cards: { presentationVersion: 3 } } };
+test("DingTalk multiline text keeps left alignment without changing the source body", () => {
+  const text = "苹果17个\r\n梨子23个\n香蕉31根";
+  const view = { content: { sections: [{ title: "完整正文", text }], notices: ["第一行\n第二行"] } };
+  const rendered = renderContent(view);
+  assert.equal(rendered.content_body, "**完整正文**\n\n苹果17个\n\n梨子23个\n\n香蕉31根");
+  assert.equal(rendered.content_notice, "第一行\n\n第二行");
+  assert.equal(view.content.sections[0].text, text);
+  assert.equal(textParagraphs("第一段\n\n第二段"), "第一段\n\n第二段");
+});
+test("multiline names cannot create Markdown continuation lines in headings or summaries", () => {
+  const rendered = renderContent({ content: { status: "状态\n说明", summary: ["名称\r\n第二行", "另一个对象"], sections: [{ title: "主题\n名称", text: "第一行\n第二行" }] } }, "操作提示\r\n下一步");
+  assert.equal(rendered.content_status, "**状态 说明**");
+  assert.equal(rendered.content_summary, "- 名称 第二行\n- 另一个对象");
+  assert.equal(rendered.content_body, "**主题 名称**\n\n第一行\n\n第二行");
+  assert.equal(rendered.content_notice, "操作提示\n\n下一步");
+  for (const card of [{}, { upgrade: true }, { upgrade: true, upgradeRecovery: {} }]) {
+    const data = inactiveContent({ ...card, name: "edit", presentationVersion: 3, expires: 2000 }, 1000);
+    assert.doesNotMatch(data.content_body, /[^\n]\n[^\n]/);
+  }
+  assert.equal(draftStatusLabel({ status: "stale", ownerReplyAt: 1000 }), "你已回复，需再次确认");
+  assert.equal(draftStatusLabel({ status: "stale", ownerReplyAt: 1000, ownerReplyReviewedAt: 1000 }), "需要重新核对");
+  assert.equal(draftStatusLabel({ status: "stale" }), "需要重新核对");
+  assert.equal(draftBodyLabel({ status: "stale", text: "" }), "暂无回复正文，请核对最新消息后生成草稿。");
+});
+test("card paragraph layout preserves multiline form values and the actual sent reply", async (t) => {
+  const body = "苹果17个\n梨子23个\n香蕉31根", f = await fixture(t, { draft: async () => body }, rich);
+  const d = await f.incoming(f.event());
+  await f.assistant.show("edit", { id: d.id });
+  assert.ok(f.cards.at(-1).data.form.fields.some(field => field.defaultValue === body));
+  const card = await f.assistant.show("draft", { id: d.id });
+  assert.ok(f.assistant.store.getCard(card.id).renderedData.content_body.includes("苹果17个\n\n梨子23个\n\n香蕉31根"));
+  await f.act(card, "send");
+  assert.equal(f.assistant.store.draft(d.id).text, body);
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.sends[0].text, body);
+});
 async function migrate(f, card) {
   f.assistant.store.card({ ...card, templateId: "old.schema", presentationVersion: 2 });
   f.assistant.store.set("cardPresentation", { version: 2, templateId: "old.schema" });
@@ -86,6 +122,8 @@ test("all original and new pages render structured content with bounded actions 
     const view = buildView(name, state, args), rendered = renderContent(view);
     assert.ok(view.content, name); assert.ok(view.buttons.length <= 6, name); assert.equal(typeof rendered.content_body, "string", name);
     assert.ok(view.content.status || view.content.sections.length || view.content.notices.length, name);
+    for (const key of ["content_body", "content_notice"]) assert.doesNotMatch(rendered[key], /[^\n]\n[^\n]/, `${name}: ${key} uses paragraph boundaries`);
+    assert.ok(rendered.content_summary.split("\n").every(line => !line || line.startsWith("- ")), `${name}: summary items stay on logical lines`);
   }
   const template = JSON.parse(JSON.parse(await readFile(new URL("../templates/dws-reply-assistant-card-v3.json", import.meta.url))).editorData);
   const tree = template.schema.componentsTree[0];

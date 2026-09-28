@@ -5,6 +5,15 @@ export function literal(value) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/([\\`*_{}\[\]()#+.!|~\-$@])/g, "\\$1");
 }
+export function textParagraphs(value) {
+  // DingTalk's MarkdownBlock indents continuation lines after a Markdown
+  // two-space hard break; a bare newline is collapsed. Paragraph boundaries
+  // preserve the visible line breaks without inserting whitespace into text.
+  return literal(value).replace(/\r\n?/g, "\n").replace(/\n+/g, "\n\n");
+}
+// Status, headings and list items are single logical lines. User-supplied names
+// may contain newlines; do not let those create Markdown continuation lines.
+const inlineLiteral = (value) => literal(value).replace(/\r\n|[\r\n]/g, " ");
 export function excerpt(value, limit = 160) {
   const parts = Array.from(new Intl.Segmenter("zh", { granularity: "grapheme" }).segment(String(value)), (x) => x.segment);
   return { text: parts.slice(0, limit).join(""), truncated: parts.length > limit };
@@ -36,12 +45,12 @@ export function plainContent(content) {
 }
 export function renderContent(view, notice = "") {
   const c = view.content;
-  const section = (s) => [s.title && `**${literal(s.title)}**`, literal(s.text).replace(/\n/g, "  \n")].filter(Boolean).join("\n\n");
+  const section = (s) => [s.title && `**${inlineLiteral(s.title)}**`, textParagraphs(s.text)].filter(Boolean).join("\n\n");
   return {
-    content_status: c.status ? `**${literal(c.status)}**` : "",
-    content_summary: (c.summary ?? []).map((v) => `- ${literal(v)}`).join("\n"),
+    content_status: c.status ? `**${inlineLiteral(c.status)}**` : "",
+    content_summary: (c.summary ?? []).map((v) => `- ${inlineLiteral(v)}`).join("\n"),
     content_body: (c.sections ?? []).map(section).join("\n\n---\n\n"),
-    content_notice: [notice, ...(c.notices ?? [])].filter(Boolean).map(literal).join("\n\n"),
+    content_notice: [notice, ...(c.notices ?? [])].filter(Boolean).map(textParagraphs).join("\n\n"),
   };
 }
 export function inactiveContent(card, now) {
@@ -53,7 +62,7 @@ export function inactiveContent(card, now) {
     : `${card.invalidated || "卡片已到期"}。\n请发送 /dws 打开新卡；已保存设置仍按原有效期生效。`;
   return {
     title: upgrade ? "助手已升级" : "代回复助手 · 已失效", description,
-    ...(card.presentationVersion === 3 ? { content_status: upgrade ? "助手已升级" : "卡片已失效", content_summary: "", content_body: literal(description), content_notice: "" } : {}),
+    ...(card.presentationVersion === 3 ? { content_status: upgrade ? "助手已升级" : "卡片已失效", content_summary: "", content_body: textParagraphs(description), content_notice: "" } : {}),
     card_status: canOpen ? "pending" : "expired", card_expires_note: "也可发送 /dws 打开助手", form: { fields: [] },
     ...Object.fromEntries(Array.from({ length: 6 }, (_, i) => [[`button${i + 1}`, i === 0 && canOpen ? "打开新版助手" : ""],
       [`action${i + 1}`, i === 0 && canOpen ? `dws-assistant:${card.id}:0` : ""]]).flat()),

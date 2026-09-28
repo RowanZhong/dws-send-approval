@@ -1,14 +1,38 @@
 const tabs = [
   ["home", "首页"], ["listen", "监听范围"], ["topics", "消息主题"], ["reply", "回复方式"],
   ["draft", "待确认草稿"], ["inbox", "批量处理"],
-  ["auto-new", "自动答复"], ["notifications", "提醒"],
+  ["fixed-replies", "固定回复"], ["notifications", "提醒"],
 ];
+
+function renderContent(content) {
+  const root = document.getElementById("description");
+  root.replaceChildren();
+  const append = (tag, text, className, parent = root) => {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    if (className) node.className = className;
+    parent.append(node);
+    return node;
+  };
+  if (content.status) append("div", content.status, "preview-status");
+  if (content.summary?.length) {
+    const summary = append("ul", "", "preview-summary");
+    content.summary.forEach((line) => append("li", line, "", summary));
+  }
+  for (const section of content.sections ?? []) {
+    const box = append("section", "", "preview-section");
+    if (section.title) append("h4", section.title, "", box);
+    append("p", section.text, "", box);
+  }
+  for (const notice of content.notices ?? []) append("p", notice, "preview-notice");
+}
 
 function render(name) {
   document.getElementById("notice").style.display = "none";
   const view = views[name] || views.home;
   document.getElementById("cardtitle").textContent = view.title;
-  document.getElementById("description").textContent = view.description;
+  renderContent(view.content);
+  document.getElementById("page-picker").value = name;
   const fields = document.getElementById("fields");
   fields.replaceChildren();
   for (const field of view.fields) {
@@ -54,7 +78,11 @@ function render(name) {
     element.textContent = button.label;
     if (index === 0) element.className = "primary";
     element.onclick = () => {
-      const route = button.op === "auto-next"
+      const route = button.op === "fixed-open" ? "fixed-detail"
+        : button.op === "fixed-edit" ? "fixed-new"
+        : button.op === "fixed-start" ? "auto-new"
+        : button.op === "send-selected" ? "batch-review"
+        : button.op === "auto-next"
         ? ({ "auto-new": "auto-content", "auto-content": "auto-limits", "auto-limits": "auto-frequency", "auto-frequency": "auto-review" })[name]
         : button.op === "topic-next" ? ({ "topic-new": "topic-definition", "topic-definition": "topic-action", "topic-action": "topic-trial", "topic-trial": "topic-limits", "topic-trial-result": "topic-limits", "topic-limits": "topic-review" })[name]
         : button.op === "topic-test" ? "topic-trial-result"
@@ -81,6 +109,13 @@ function render(name) {
     button.setAttribute("aria-pressed", String(active));
   });
 }
+for (const [name, view] of Object.entries(views)) {
+  const option = document.createElement("option");
+  option.value = name;
+  option.textContent = view.title;
+  document.getElementById("page-picker").append(option);
+}
+document.getElementById("page-picker").onchange = (event) => render(event.target.value);
 for (const [name, label] of tabs) {
   const button = document.createElement("button");
   button.type = "button";
