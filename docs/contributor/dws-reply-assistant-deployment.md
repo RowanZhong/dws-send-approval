@@ -1,6 +1,6 @@
 # 钉钉个人代回复助手 · 技术方案与安装配置
 
-**开发及运维指南 · 下一版本候选 · 2026-09-28 · 待发布确认**
+**开发及运维指南 · main 已更新 · 2026-09-28 · 双版必要真机验收完成**
 
 面向开发人员和平台管理员。员工操作另见[员工使用手册](../user/dws-reply-assistant-manual.html)。适用一名员工一个 Pod、独立 OpenClaw 实例；兼容验证覆盖 OpenClaw 2026.7.1-2 与 2026.8.1。
 
@@ -45,7 +45,7 @@ DWS 认证事件 → 范围过滤、业务消息去重 → 持久化草稿/收�
 
 - **社区插件** 只新增卡片投递与 Stream 回调适配层。通过已有 Stream 连接传递回调的用户 ID、账号、卡片 ID，不从消息正文或表单字段推断身份。没有新增 HTTP 端口或第二条社区插件 Stream 连接。
 - **独立助手插件** 负责个人偏好、监听、草稿、自动授权、通知和发送。从 0.8.0 起只维护一个项目、一个安装包；新版通过通用卡片接口接入，旧版通过既有桥接接入。业务逻辑无需同步到两个社区仓库。
-- **无工具拟稿** 使用宿主 `runtime.llm.complete`，只传写作要求、当前来信、默认最近 5 分钟同会话的可用对话文字（过滤可识别媒体，不读附件），最多 50 条、12000 字符及本条本人提供的资料；默认不启动 Agent；显式开启受限工具时按专用 Agent 策略运行，见下方新增能力部署说明。不同会话上下文不混合，历史未发送草稿不作为已发事实。
+- **无工具拟稿** 使用宿主 `runtime.llm.complete`，只传写作要求、当前来信、默认最近 5 分钟同会话的可用对话文字（过滤可识别媒体，不读附件），最多 50 条、12000 字符及本条本人提供的资料；默认不启动 Agent；显式开启受限工具时按专用 Agent 策略运行，配置步骤见[第 3 节专用 Agent 部署](#draft-agent-setup)。不同会话上下文不混合，历史未发送草稿不作为已发事实。
 - **确认校验** 绑定本人 staffId、社区账号、outTrackId、一次性按钮令牌、到期时间和草稿版本。接收会话只能来自可信 DWS 事件，表单不能更换接收人、DWS profile 或执行命令。本人以外点击、转发卡、旧版本、重复点击都会被拒绝。
 - **发送器** 用固定可执行路径、绑定 profile 和 argv（`shell:false`）发送。私聊使用 `chat +messages-send --as user`；群消息使用 `chat +messages-reply`，绑定监听事件的 `--conversation-id`、`--message-id`、`--ref-sender`，并按已审阅正文生成稳定幂等键。人工发送、编辑后发送和固定自动回复共用该发送器。引用失败不回退普通群消息；无本地来源信息时保留待处理，网络或结果不明确时标为 unknown，禁止自动重发。`--yes` 只由授权后的代码添加。DWS 1.0.58 的 `im.message-reply.v1` 回执与普通发送格式不同，必须分别校验；引用回复不等同于独立话题写入。
 - **重启恢复** 先把 sending 状态写入数据库，再发出请求。发送成功才记 sent；超时、断线或进程中断记 unknown，不自动重试，避免重复发信。卡片和草稿可恢复；结果不明时需本人核对钉钉实际记录。
@@ -64,11 +64,11 @@ DWS 认证事件 → 范围过滤、业务消息去重 → 持久化草稿/收�
 
 `/dws-reply preview` 使用宿主为当前命令绑定的无工具接口，仅试写、无发送；多 Agent 环境中预览成功不能替代后台监听拟稿验收，后台仍按上述插件 `agentId` 与宿主默认归属检查。
 
-操作卡片的截止时间由独立字段 `card_expires_note` 投递，模板在按钮下方以右对齐的小号备注显示“卡片有效期至 MM/DD HH:mm”。它只控制卡片回调；监听设置持续生效，草稿和自动答复授权分别检查自己的到期时间。从不含备注组件的早期版本升级时，需新建普通卡片模板、导入并发布配套 JSON，再更新 `assistant.cardTemplateId`。0.8.0 抽离当时不需要再发模板；本开发版本的富文本模板必须重新导入、由平台编译发布并完成验证，再切换唯一模板 ID 与展示版本。
+操作卡片的截止时间由独立字段 `card_expires_note` 投递，模板在按钮下方以右对齐的小号备注显示“卡片有效期至 MM/DD HH:mm”。它只控制卡片回调；监听设置持续生效，草稿和自动答复授权分别检查自己的到期时间。从不含备注组件的早期版本升级时，需新建普通卡片模板、导入并发布配套 JSON，再更新 `assistant.cardTemplateId`。0.8.0 抽离当时不需要再发模板；当前 main 的富文本模板必须重新导入、由平台编译发布并完成验证，再切换唯一模板 ID 与展示版本。
 
 **即时提醒去重（0.6.1）。** 只把尚未成功提醒的草稿版本加入新通知；多条合并时保留本批消息范围，翻页或打开其中一条不会忘记其他已提醒项。成功投递/更新后才记录覆盖；新卡投递结果未知时持久化预留且禁止自动换卡重发，仅原卡更新失败可退避补刷；状态有上限，不新增进程或轮询。重启后原卡有效则不重复推送；过期卡允许重新提醒，设置为定时汇总时仍按员工选择汇总待办。原卡主动重新拟稿会更新其版本记录，不再另弹同条通知。编辑中的页面继续保留。
 
-新版等待用户确认只保存状态，不占 main 执行 lane；模型拟稿有自己的串行队列，单次最长 30 秒。DWS 调用最长 20 秒，卡片 API 请求最长 15 秒。Stream 回调接收后异步处理，避免模型请求占住回调确认。
+等待用户确认只保存状态，不占 main 执行 lane；无工具拟稿有自己的串行队列，单次最长 30 秒。可选专用 Agent 起草使用独立执行通道，默认等待预算 120 秒。DWS 调用最长 20 秒，卡片 API 请求最长 15 秒。Stream 回调接收后异步处理，避免模型请求占住回调确认。
 
 这不表示完全没有同步工作：SQLite 的短事务是同步执行，CPU、磁盘、内存、模型额度仍与主实例共享。命令注册和后台服务通过完整配置指纹绑定，兼容宿主的运行时预热重新注册。持久化不可用、队列超限等情况会停止监听接入，不静默丢弃后继续自动发送。修复问题后由员工重新开启；若状态要求重启，按日志处理。
 
@@ -178,6 +178,245 @@ openclaw channels status --probe --json
 ```
 
 
+<div id="draft-agent-setup"></div>
+
+### 可选：开启专用只读起草 Agent（两版完整步骤）
+
+本节适用于已经完成上文助手安装、DWS 身份绑定和卡片配置的实例。新装及升级均默认 `assistant.drafting.toolsEnabled:false`，继续使用无工具起草；只有需要起草时主动查询资料，才执行本节。普通无工具起草也会带入默认最近 5 分钟的对话文字。主题识别仍使用无工具接口，AI 草稿最终仍由本人确认发送。
+
+开启需要同时满足两项：**宿主中新增专用 Agent，并在助手配置中选择该 Agent、打开工具开关。** 专用 Agent 不作为系统主 Agent，也不接收普通钉钉会话。不要把插件顶层 `config.agentId` 改成 `dws-draft`；顶层仍指向原有无工具拟稿 Agent。
+
+#### 第一步：核对配置文件、状态目录和授权
+
+在 Gateway 相同的运行用户、容器及环境变量下执行：
+
+```bash
+openclaw --version
+openclaw config file
+```
+
+编辑命令返回的实际配置文件；若使用 `$include`，在对应源文件合并，避免同一配置在多个文件重复定义。先备份配置和员工状态。Kubernetes 部署在该员工的配置来源中更新，并保留原 PVC；本节示例不改变 DWS 登录环境或要求重新登录。
+
+| 示例值 | 部署时替换为 |
+| --- | --- |
+| `main` | 当前主 Agent ID；保留其模型、工作目录、工具及普通会话权限 |
+| `default` | 助手 `accountId` 对应的钉钉账号 ID，和现有 Channel 一致 |
+| `dws-draft` | 新增专用 Agent ID；若改名，Agent 定义、插件 `drafting.agentId` 和工作目录末级必须同步 |
+| `/srv/openclaw/state` | 该实例实际的 service stateDir 绝对路径；通常由 Gateway 的 `OPENCLAW_STATE_DIR` 决定，未设置时使用该运行用户的宿主默认状态目录。不能用主 Agent 的 workspace 代替，也不能仅凭配置文件位置推断 |
+| `openai/gpt-5.6-sol` | 已向专用 Agent 授权且支持工具调用的模型；同时替换 `model.primary` 和 `models` 中的键 |
+| `OWNER_STAFF_ID`、`/usr/local/bin/dws`、模板 ID | 原助手配置中的本人身份、实际 DWS 路径和已发布模板 ID，保持原值 |
+
+专用 workspace 必须精确等于 `<service stateDir>/dws-send-approval/draft-workspace/<起草 Agent ID>`。插件启用后创建该目录；不能指向员工工作文件目录。宿主可在自己的任务会话和该目录保存临时状态，四个起草工具不修改用户业务数据。
+
+以下两份 JSON 是**各版本独立可用的配置合并示例**，包含完整的 Agent、钉钉路由和助手开关层级；不是整个 `openclaw.json` 的替换文件。保留现有 `channels`、模型提供商与认证、`commands`、其他 Agent、其他插件及原助手配置字段。对象按键合并，数组按下面说明逐项处理，不能用示例数组覆盖原数组。
+
+<div id="draft-agent-modern"></div>
+
+#### 第二步 A：OpenClaw 2026.8.1 配置
+
+在根对象的 `agents.entries` 中新增 `dws-draft`。示例使用 `ownership:"explicit"`，通过 `defaults.systemAgent.agentId` 明确保持原主 Agent，并为钉钉账号保留明确路由。`main:{}` 表示保留已有主 Agent 的全部字段，不是清空其配置。
+
+<!-- draft-config:2026.8.1 -->
+```json
+{
+  "agents": {
+    "ownership": "explicit",
+    "defaults": {
+      "systemAgent": { "agentId": "main" }
+    },
+    "entries": {
+      "main": {},
+      "dws-draft": {
+        "workspace": "/srv/openclaw/state/dws-send-approval/draft-workspace/dws-draft",
+        "model": {
+          "primary": "openai/gpt-5.6-sol",
+          "fallbacks": []
+        },
+        "models": {
+          "openai/gpt-5.6-sol": {
+            "agentRuntime": { "id": "openclaw" },
+            "codeMode": false
+          }
+        },
+        "tools": {
+          "allow": [
+            "dws_draft_history",
+            "dws_draft_contact",
+            "dws_draft_search",
+            "dws_draft_read"
+          ],
+          "codeMode": { "enabled": false }
+        },
+        "skills": []
+      }
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": { "channel": "dingtalk", "accountId": "default" }
+    }
+  ],
+  "plugins": {
+    "entries": {
+      "dws-send-approval": {
+        "enabled": true,
+        "config": {
+          "agentId": "main",
+          "accountId": "default",
+          "ownerUserId": "OWNER_STAFF_ID",
+          "dwsPath": "/usr/local/bin/dws",
+          "listener": { "enabled": false },
+          "assistant": {
+            "enabled": true,
+            "cardTemplateId": "PUBLISHED_ASSISTANT_CARD_TEMPLATE_ID",
+            "drafting": {
+              "toolsEnabled": true,
+              "agentId": "dws-draft",
+              "timeoutSeconds": 120,
+              "documentWorkspaceIds": []
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+如果现有配置采用兼容的 `default:true` 主 Agent 标记，可以保持该归属模式并新增起草 Agent；**不要同时设置 `ownership:"explicit"` 和 `default:true`**。若按上述示例转为 explicit，先核对原主 Agent，再移除旧默认标记，保留原来的 `authInheritance`、`sessionStore` 等其他归属配置。已有钉钉账号级 binding 时核对并复用，缺失时再追加；保留群或个人的更具体路由及其他 Channel 路由。只设置 systemAgent 不能替代钉钉账号路由。
+
+模型配置和 `tools` 两层的 Code Mode 均须关闭。示例不设置回退模型；若部署自定义回退模型，每个回退模型也要在该 Agent 的 `models` 下显式配置 `agentRuntime.id:"openclaw"` 和 `codeMode:false`。
+
+<div id="draft-agent-legacy"></div>
+
+#### 第二步 B：OpenClaw 2026.7.1-2 配置
+
+在根对象的 `agents.list` 数组中追加起草 Agent，按 ID 保留原主 Agent 及其他 Agent 的完整内容，并确保只有原主 Agent 标记 `default:true`。本版不使用 `agents.entries`、`agents.ownership` 或 `defaults.systemAgent`。以下是独立示例，不需要从新版示例手动删除字段：
+
+<!-- draft-config:2026.7.1-2 -->
+```json
+{
+  "agents": {
+    "list": [
+      { "id": "main", "default": true },
+      {
+        "id": "dws-draft",
+        "workspace": "/srv/openclaw/state/dws-send-approval/draft-workspace/dws-draft",
+        "model": {
+          "primary": "openai/gpt-5.6-sol",
+          "fallbacks": []
+        },
+        "models": {
+          "openai/gpt-5.6-sol": {
+            "agentRuntime": { "id": "openclaw" }
+          }
+        },
+        "tools": {
+          "allow": [
+            "dws_draft_history",
+            "dws_draft_contact",
+            "dws_draft_search",
+            "dws_draft_read"
+          ],
+          "codeMode": { "enabled": false }
+        },
+        "skills": []
+      }
+    ]
+  },
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": { "channel": "dingtalk", "accountId": "default" }
+    }
+  ],
+  "plugins": {
+    "entries": {
+      "dws-send-approval": {
+        "enabled": true,
+        "config": {
+          "agentId": "main",
+          "accountId": "default",
+          "ownerUserId": "OWNER_STAFF_ID",
+          "dwsPath": "/usr/local/bin/dws",
+          "listener": { "enabled": false },
+          "assistant": {
+            "enabled": true,
+            "cardTemplateId": "PUBLISHED_ASSISTANT_CARD_TEMPLATE_ID",
+            "drafting": {
+              "toolsEnabled": true,
+              "agentId": "dws-draft",
+              "timeoutSeconds": 120,
+              "documentWorkspaceIds": []
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+旧版 `models[模型]` 不支持 `codeMode` 字段，所以示例只在 `tools.codeMode.enabled` 关闭 Code Mode；不要从新版复制模型层的 `codeMode:false`。每个回退模型仍须显式设置 `agentRuntime.id:"openclaw"`。`bindings` 同样按现有账号路由核对、缺失时追加，不覆盖其他路由。
+
+#### 第三步：配置模型认证与允许检索的知识库
+
+专用 Agent 必须能通过宿主支持的认证方式调用所选模型。主 Agent 的无工具起草成功，不足以证明新增 Agent 的模型授权可用。沿用平台的模型凭据管理，不在示例中粘贴真实密钥，也不手工复制 OAuth 刷新材料到多个 Agent。
+
+对于 **2026.7.1-2、已经存在有效 OpenAI OAuth 登录、但起草 Agent 报缺少 API key** 的组合，本次真机验证使用如下认证类型声明后可正常运行。只在确认实际 profile ID 和认证类型一致时合并；这段声明不执行登录，不适用于原本使用 API key 的 profile：
+
+```json
+{
+  "auth": {
+    "profiles": {
+      "openai:default": { "provider": "openai", "mode": "oauth" }
+    }
+  }
+}
+```
+
+两份示例的 `documentWorkspaceIds:[]` 默认不开放文档检索。需要查询知识库时，改为该员工 DWS 账号有权读取的知识库空间 ID，例如 `["WORKSPACE_ID_1", "WORKSPACE_ID_2"]`，最多20个。这里是**知识库空间 ID**，不是文档链接、目录路径或模板 ID；配置不能扩大该账号原有访问权限。
+
+| 工具 | 当前允许的操作 | 边界 |
+| --- | --- | --- |
+| `dws_draft_history` | 读取本次起草已固定的近期对话文字，最多50条 | 只含本人及发送者，不能换会话，不读附件 |
+| `dws_draft_contact` | 读取本人或已核实发送者的姓名、部门、职位 | 不按姓名猜测身份，不返回手机号或邮箱 |
+| `dws_draft_search` | 检索指定知识库中的在线文字文档 | 先核实知识库归属，再返回标题和本任务读取标识；范围为空时不可用 |
+| `dws_draft_read` | 读取本任务检索到的文档正文，单篇最多8000字符 | 不能提供任意 URL、文件路径或其他任务的标识 |
+
+工具允许清单必须恰好为这四项。每次起草最多12次工具调用，单次工具结果最多16000字符。没有开放浏览器、任意文件读取、通用命令执行、消息发送、写入、删除或任务委派。新增工具需要代码实现与边界审查，不能只在 `allow` 中追加名称。知识库检索范围和四个工具与卡片展示版本无关，启用 Agent 不要求同时切换 v3 模板。
+
+#### 第四步：校验配置、重启并验收
+
+1. 在与 Gateway 一致的运行环境执行 `openclaw config validate --json`，确认宿主配置和已安装插件配置均有效；校验不会启动 Gateway。若校验提示插件不存在，先完成本项目安装及原有加载路径配置。配置格式通过不代表模型凭据、只读预检或工具调用已经通过。
+2. 检查起草 Agent 的专属 workspace、模型、四个工具及两版 Code Mode 差异。当前实现会拒绝未经审核的生命周期 Hook、已配置且未明确关闭的动态工具加载，以及未审核插件或记忆插件的运行组合。已验组合是本助手、钉钉 Channel、`memory-core` 和宿主内置 `openai` 提供商；生产实例若还有其他组件，先审查兼容性，不能为绕过检查直接删除生产插件或放宽起草工具权限。
+3. 服务方式部署执行 `openclaw gateway restart`；Pod 部署通过原编排流程重启该员工实例。保留状态卷，并确保同一员工只有一个活动实例。用 `openclaw channels status --probe --json` 确认钉钉连接正常。
+4. 本人在机器人私聊发送 `/dws identity`，应显示已就绪，再发送 `/dws` 打开卡片，确认原监听范围和回复设置仍在。这一步只验证身份与卡片，**不能单独证明 Agent 起草已启用**。
+5. 在卡片把测试来源设置为“AI起草，我确认”，开启该测试来源的监听；若启用了主题规则，保证测试消息会进入 AI 起草分支。由测试联系人发送一条要求引用知识库测试文档中独有信息的来信，文档须在允许空间内。核对实际检索/读取记录、草稿事实和待确认状态；如未配置知识库，可先以“参考本人部门信息拟稿”的来信验证联系人查询。模型可自行判断是否需要工具，因此仅看到一段草稿不能证明工具已被调用。
+6. 核对普通机器人私聊仍交给原主 Agent；测试草稿未批准前，不应向联系人发送回复。确需验证发送时，由本人在卡片明确批准并核对目标和正文。验收后恢复临时测试范围、规则与监听选择。不要依赖已清理的临时 transcript 作长期审计记录。
+
+默认起草等待预算为120秒，可设10–600秒。超时不等于宿主任务已结束；插件保留未结束任务保护，不重启同一任务、不采用迟到输出。关闭工具起草时，把 `assistant.drafting.toolsEnabled` 设为 `false` 并重启；后续新任务恢复无工具起草。已有未结束任务仍需确认终态，不删除其账本、草稿或会话来绕过保护。其他 Agent 和业务数据不需要清空。
+
+#### 常见错误与处理
+
+| 表现或提示 | 核对与处理 |
+| --- | --- |
+| “请配置专用起草 Agent” | 核对 Agent 是否存在、`drafting.agentId` 是否一致；不能填 `main` 或当前系统主 Agent |
+| “起草 Agent 必须使用插件专属的独立工作目录” | 从 Gateway 的实际 stateDir 重新计算路径；不要填主 Agent workspace、配置目录或另一员工的 PVC |
+| 旧版配置提示 `codeMode` 字段无效 | 删除 `agents.list` 中模型层的 `codeMode`，保留 `tools.codeMode.enabled:false`；新版须保留两层 |
+| 新版提示多个 Agent 没有明确归属，或 `explicit` 与默认标记冲突 | 核对 `ownership`、systemAgent 和既有 `default:true`；按本节第二步 A 保留一种合法归属模式 |
+| 钉钉提示 `routing has no explicit owner` | 补齐当前钉钉 `accountId` 到原主 Agent 的账号级 binding；不要把普通消息路由到 `dws-draft` |
+| 提示工具清单、实际工具来源或只读策略不符合要求 | 四个工具须来自本插件；核对 `allow`、Code Mode、`alsoAllow`、按提供商或发送者加工具、动态加载及生命周期插件。保持失败时拒绝，不放宽为全部工具 |
+| 起草报模型认证失败、缺少 API key | 核对专用 Agent 使用的模型和认证 profile；旧版已用 OpenAI OAuth 的情况按第三步确认类型。DWS 重新登录不能修复模型认证 |
+| 提示“管理员尚未配置可检索的知识库范围” | 填写 `documentWorkspaceIds`；填完还需确认 DWS 账号本来就有读取权限 |
+| 发送者资料无法核实、文档不存在或无权访问 | 允许草稿说明资料不足；不按姓名猜测身份、不换账号查询、不扩大知识库范围 |
+| “上一次任务尚未确认结束”或超过等待预算 | 等待宿主终态并核对运行状态，不重复启动或删除保护记录；普通 `/dws identity refresh` 不是取消 Agent 的命令 |
+| 开了工具但卡片只有固定回复或不生成草稿 | 检查来源、主题动作、普通回复方式和监听选择；只有进入 AI 起草分支才使用专用 Agent |
+
+更多查询限制、任务清理和已知接口差异见[只读起草能力与限制](read-only-drafting.md)。本节示例已通过两版宿主的配置格式与路由校验；功能真机验收详见第6节链接的执行记录，本次文档补充未重新执行真机测试。
+
+
 ## 4. 配置项从哪里来
 
 | 字段 | 来源与含义 |
@@ -187,7 +426,7 @@ openclaw channels status --probe --json
 | accountId | 不填时为 `default`，优先读取 `channels.dingtalk.accounts.default`，否则读取顶层 `channels.dingtalk`；指定命名账号时读取 `channels.dingtalk.accounts[accountId]`，按社区插件规则继承顶层 clientId。不会自动选择列表中的第一个账号 |
 | profile | 0.6.0 自动执行 `dws profile list --format json`，校验 `currentProfile` 对应的唯一当前账号、组织、userId 和 DWS 授权应用，再固定为 `corpId:userId`。userId 必须等于 ownerUserId |
 | 审批机器人的开放 ID | 0.6.0 自动查找；不再配置 APPROVAL_BOT_OPEN_DINGTALK_ID 或 OC_APPROVAL_BOT_OPEN_ID。它是社区机器人在个人 IM 事件里的 sender_open_dingtalk_id，不是 clientId/robotCode，也不是主人的 UserId |
-| assistant.cardTemplateId / OC_DWS_ASSISTANT_CARD_TEMPLATE_ID | 本应用可使用的已发布代回复助手卡片模板 ID，本次无需修改模板 |
+| assistant.cardTemplateId / OC_DWS_ASSISTANT_CARD_TEMPLATE_ID | 本应用可使用的已发布代回复助手卡片模板 ID；保留原值可继续使用 v2，启用新版富文本排版时按第3节“卡片模板与必要权限”发布并切换到 v3 模板 |
 | agentId | 模型配置来源，通常 `main`，与 DWS 账号选择无关 |
 
 ### 自动发现如何执行
@@ -335,9 +574,9 @@ OpenClaw 状态目录和 DWS 配置目录挂载员工独立的持久卷。不要
 
 接口可用时，临时断线或请求错误不会触发跨接口重试。切换接口导致旧操作卡停用，业务状态保留。接口升级应连同宿主版本、补丁校验值与卡片真机回归一起验收。
 
-### 下一版本配置与上线门槛
+### 当前 main 的配置与验收范围
 
-本节为开发分支的新行为，尚未完成全量真机验收，不能据此直接滚动发布。详细参数、只读专用 Agent、模板切换、已知接口限制见 [新增能力部署说明](read-only-drafting.md)。本轮进度以 [2026-09-28 执行记录](../plans/2026-09-28-development-record.md) 为准；下方历次验收不是新功能验收。
+本轮功能与身份修复已通过两版必要真机验收，并已推送 GitHub main，代码基线为 `6662d54`。专用 Agent 的两版完整配置、路由、启用验证和排错见[第 3 节](#draft-agent-setup)；参数、模板迁移及接口限制见[只读起草能力与限制](read-only-drafting.md)。完整证据与未覆盖范围见 [2026-09-28 执行记录](../plans/2026-09-28-development-record.md)及[身份修复记录](../plans/2026-09-28-identity-recovery.md)。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。当前包版本仍为 `0.8.0`，本次没有另发新版本标签，部署应记录实际 Git 提交并从对应源码打包。
 
 ## 7. 验证、性能与交付状态
 

@@ -1,6 +1,6 @@
-# 下一版本新增能力部署说明
+# 只读起草能力、参数与部署限制
 
-开发分支说明，2026-09-28。两版必要真机验收已完成，包含真实来信、可见卡片、实际按钮及发送结果核对；当前仅本地提交，待用户验收与发布确认。旧设置、插件 ID、状态路径和 settings version 1 保持兼容；新字段缺失时补默认值，不重置偏好或扩大旧授权。
+当前 main 配套说明，2026-09-28。本轮代码基线 `6662d54` 已推送 GitHub；两版必要真机验收已完成，包含真实来信、可见卡片、实际按钮及发送结果核对。旧设置、插件 ID、状态路径和 settings version 1 保持兼容；新字段缺失时补默认值，不重置偏好或扩大旧授权。
 
 ## 参数与默认值
 
@@ -50,44 +50,14 @@
 
 未知生命周期 Hook、动态工具加载、未经审核的插件或记忆插件会阻止启用。已检查的运行组合为本插件、钉钉 Channel、`memory-core` 及宿主内置 `openai` 提供商；外部安装的同名提供商仍拒绝。可信宿主安装和运行配置是前提，插件不能把恶意宿主变成沙箱。其他插件需先审查其生命周期行为；不要为了启用起草而不经评估删除生产插件。
 
-## 两版宿主配置差异
+## 两版宿主配置入口
 
-保留原主 Agent 配置和默认归属。只在管理员明确开启此能力时添加专用 Agent，不由安装、构建或测试脚本改生产配置。
+完整配置现集中在[技术方案与安装配置：专用 Agent 部署](dws-reply-assistant-deployment.md#draft-agent-setup)，主文档包含两份独立 JSON、配置合并位置、状态目录、主 Agent 归属、钉钉账号路由、模型认证、验证和排错，不需要从本补充文档拼装。
 
-2026.8.1 在 `agents.entries.dws-draft` 中添加：
-
-```json
-{
-  "workspace": "<service stateDir>/dws-send-approval/draft-workspace/dws-draft",
-  "model": { "primary": "openai/gpt-5.6-sol", "fallbacks": [] },
-  "models": {
-    "openai/gpt-5.6-sol": { "agentRuntime": { "id": "openclaw" }, "codeMode": false }
-  },
-  "tools": {
-    "allow": ["dws_draft_history", "dws_draft_contact", "dws_draft_search", "dws_draft_read"],
-    "codeMode": { "enabled": false }
-  },
-  "skills": []
-}
-```
-
-模型 ID 应换成该实例实际授权模型，同时更新 `model.primary` 和 `models` 键。每个回退模型也必须显式使用 `openclaw` 运行方式并关闭 Code Mode。多个 Agent 时保持合法的 `agents.ownership` 和 `agents.defaults.systemAgent`；不得将起草 Agent 设为系统主 Agent。
-
-2026.7.1-2 在 `agents.list` 中增加带 `id:"dws-draft"` 的同等条目，并保留原主 Agent 的 `default:true`。这一版的 `models[模型]` schema **不支持** `codeMode`，须删除该层的 `codeMode:false`，仅保留 `agentRuntime:{id:"openclaw"}`；仍必须保留 `tools.codeMode.enabled:false`，并由实际 SDK 工具集合检查兜底。新版本须同时配置两层。
-
-最后设置插件 `assistant.drafting:{toolsEnabled:true,agentId:"dws-draft",documentWorkspaceIds:[]}`。模型凭据必须按宿主支持的方式供该 Agent 使用；不要复制不可移植的 OAuth 刷新材料到多个 Agent。只有无工具路径正常不代表独立 Agent 已有模型权限。
-
-旧宿主若已能发现有效 OpenAI OAuth 登录，但专用 Agent 的原生执行仍报告缺少 API key，应先核对认证类型与模型接口。在本次 2026.7.1-2 隔离验证中，为**已经存在的** `openai:default` 配置如下宿主元数据后，使用 `openai-chatgpt-responses` 成功调用模型与只读工具，无需复制凭据。实际 profile ID 应采用本机已核实值；这段配置本身不会完成登录，也不要覆盖既有 API key 配置。
-
-```json
-{
-  "auth": {
-    "profiles": {
-      "openai:default": { "provider": "openai", "mode": "oauth" }
-    }
-  }
-}
-```
+| 宿主 | 完整示例 | 关键差异 |
+| --- | --- | --- |
+| 2026.8.1 | [新版配置](dws-reply-assistant-deployment.md#draft-agent-modern) | `agents.entries`；明确原主 Agent 归属及钉钉账号路由；模型与工具两层关闭 Code Mode |
+| 2026.7.1-2 | [旧版配置](dws-reply-assistant-deployment.md#draft-agent-legacy) | `agents.list`；原主 Agent 保留 `default:true`；模型层不填写 Code Mode，工具层必须关闭 |
 
 任务总等待预算默认 120 秒（可配置 10–600 秒），每次等待不超过 10 秒。等待超时不代表任务结束：保留 `unsettled` 和发送保护，禁用其工具权限，不重启同一会话任务、不采用迟到输出。维护任务确认终态后删除本插件创建的会话及 transcript；删除失败可重试。最多 20 个未结束任务，同一私聊批次分区有未结束任务时拒绝新起草。终态会话清理完成后，任务账本按正文保留期限分批回收。
 
