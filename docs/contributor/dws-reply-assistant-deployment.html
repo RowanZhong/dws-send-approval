@@ -301,7 +301,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 </tr>
 </tbody>
 </table></div>
-<p>profile 单次最多 5 秒，本人/机器人查询单次最多 10 秒，每轮身份初始化或按需身份解析总预算 30 秒。超时/停止发送 SIGTERM，500 毫秒后仍未退出则 SIGKILL；完成或取消后清理定时器和子进程。CLI 输出总量不超过 1 MiB，不把原始 stderr、令牌或登录凭据写入用户提示。</p>
+<p>profile 单次最多 5 秒，本人/机器人查询单次最多 10 秒；手动刷新时的条件性认证检查最多 15 秒，每轮身份初始化或按需身份解析总预算仍为 30 秒。超时/停止发送 SIGTERM，500 毫秒后仍未退出则 SIGKILL；完成或取消后清理定时器和子进程。CLI 输出总量不超过 1 MiB，不把原始 stderr、令牌或登录凭据写入用户提示。</p>
 <p>自动启动只有明确可重试的错误会额外重试最多 2 次，基础间隔 5 秒、30 秒，加随机抖动并遵守较长的服务端 retry-after。未登录、账号不符、结果不唯一等不会循环重试。没有登录态轮询，也没有每条消息的身份查询；登录后由员工 <code>/dws identity refresh</code>、再次启用或重启触发检测。同一实例内并发检测合并，主动刷新若遇到正在初始化会串行执行，不会被静默忽略。</p>
 <p>缓存位于 <code>&lt;service stateDir&gt;/dws-send-approval/identity.json</code>，0600、原子写入，本人及机器人结果有效期 24 小时。绑定包含员工、组织/profile、DWS OAuth clientId、社区 accountId/clientId 和 DWS 配置目录；同一员工换应用也不能无提示复用旧缓存。过期在下一次启动、启用或刷新时处理，不按固定周期访问平台。<code>/dws identity refresh</code> 强制重新查询，不清空偏好或草稿，也不擅自开启监听；如果个人原本开启，会短暂停止后按原范围恢复，重建订阅期间的历史消息不会补读。</p>
 <p>旧版显式 <code>profile</code> 仍接受，但只作为一致性检查；推荐从配置中删除，改为自动发现。升级时务必删除配置中的 <code>${OC_DWS_PROFILE}</code> 和机器人 ID 占位引用，不能仅删除环境变量，否则宿主在加载配置阶段就可能因变量缺失失败。若原状态保存了别名而不是规范 <code>corpId:userId</code>，会保守拒绝身份不一致；管理员先备份并核对旧状态后迁移，不手工复制另一个员工的 identity.json。</p>
@@ -311,6 +311,10 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 /dws identity refresh
 </code></pre></figure>
 <p>第一个只读取内存状态，不启动 CLI，显示员工、profile、机器人应用和已解析的开放 ID、查询时间与缓存来源；第二个立即回复“已开始后台身份检测”，后台检测后再用第一个查看结果。两者都校验本人身份、钉钉账号及私聊来源，不能在群聊、Web 或其他员工会话冒用。未登录时也可以查看此状态入口；需要登录的员工完成 DWS 授权后再刷新。</p>
+<h3 id="已登录但账号信息不完整" tabindex="-1">已登录但账号信息不完整 <a class="header-anchor" href="#已登录但账号信息不完整" aria-label="Permalink to &quot;已登录但账号信息不完整&quot;">&ZeroWidthSpace;</a></h3>
+<p>“DWS 已登录”与“助手已验证完整绑定”是两项检查。DWS profile 元数据缺少组织 ID（corpId）、用户 ID（userId）或授权应用 ID（clientId）时，助手会明确列出缺失或格式异常的字段，保留个人数据并停止初始化。DWS 授权应用 ID 与社区机器人的 clientId 含义不同，不能互相替代。</p>
+<p>只有本人手动 <code>/dws identity refresh</code>，且当前账号唯一、组织和用户有效、与实例主人及显式 profile 配置一致、仅缺少 clientId 时，才执行一次 <code>dws auth status --profile CORP_ID:USER_ID --format json</code>。插件校验返回的组织、用户和有效凭据，再读取一次 profile。字段恢复完整后仍需通过原身份缓存的全部绑定校验，才能继续初始化。正常启动、普通 <code>/dws</code> 重试、健康账号刷新均不增加认证检查，也没有后台轮询或自动反复尝试。</p>
+<p>DWS 1.0.58 的认证检查不返回授权应用 ID；已实测有效登录仍可能缺少 profile 的 clientId。此时会提示“DWS 登录有效，但账号信息仍缺少授权应用 ID”，请管理员在 <strong>Gateway 的同一运行用户、配置目录和密钥环境</strong> 对当前账号重新授权，然后刷新。无需先退出所有账号。插件不会登录、登出、切换账号、读取令牌文件或猜测缺失 ID；旧缓存也不能充当当前身份的证明。如果认证检查报告密钥或钥匙串问题，应先保留凭据并修复运行环境。恢复后若授权应用发生变化，仍按原绑定迁移流程处理，不能直接覆盖 identity.json。</p>
 <h3 id="单实例配置" tabindex="-1">单实例配置 <a class="header-anchor" href="#单实例配置" aria-label="Permalink to &quot;单实例配置&quot;">&ZeroWidthSpace;</a></h3>
 <p>下面文件是合并片段，保留原有 channels、agents、Web 权限及其他插件配置。<code>approvals.plugin</code> 用于兼容旧审批；不要覆盖其他插件现有的审批目标。</p>
 <figure class="code-block"><figcaption>JSON 配置</figcaption><pre tabindex="0" aria-label="JSON 配置"><code>{

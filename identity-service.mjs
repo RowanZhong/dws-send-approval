@@ -7,6 +7,8 @@ import { runIdentityCli, IdentityError, cancelled } from "./identity-cli.mjs";
 import {
   channelRobot,
   selectProfile,
+  selectAuthCheckProfile,
+  verifyAuthStatus,
   makeBinding,
   sameBinding,
   readIdentity,
@@ -47,7 +49,8 @@ export function createIdentityService(api, config, dependencies = {}) {
   let state = "stopped",
     detail = "",
     cached = false,
-    forceQueued = false;
+    forceQueued = false,
+    authCheckQueued = false;
   const fallback = createPolicy(config, new SourceStore(config));
   const check = (signal = aborter?.signal) => {
     if (closed || signal?.aborted) throw cancelled();
@@ -67,12 +70,30 @@ export function createIdentityService(api, config, dependencies = {}) {
       check(signal);
       return runner(config, args, { signal, timeoutMs });
     };
-  const profile = async (signal = aborter.signal) => {
+  const profile = async (signal = aborter.signal, allowAuthCheck = false) => {
     const call = callWith(signal);
-    const selected = selectProfile(
-      await call(["profile", "list", "--format", "json"], 5000),
-      config,
-    );
+    const data = await call(["profile", "list", "--format", "json"], 5000);
+    let selected;
+    try {
+      selected = selectProfile(data, config);
+    } catch (error) {
+      if (!allowAuthCheck || error.identityReason !== "profile_client_id_missing") throw error;
+      const target = selectAuthCheckProfile(data, config);
+      // Only an explicit refresh, a uniquely selected owner and a missing
+      // OAuth app ID reach this path. No login/logout, cross-account fallback,
+      // credential file reads, or reuse of the cached app ID.
+      verifyAuthStatus(await call(["auth", "status", "--profile", target.profile, "--format", "json"], 15000), target);
+      const refreshed = await call(["profile", "list", "--format", "json"], 5000);
+      const current = selectAuthCheckProfile(refreshed, config);
+      if (current.profile !== target.profile)
+        throw new IdentityError("account_mismatch", "DWS 当前账号在认证检查期间发生变化，未继续初始化。");
+      try {
+        selected = selectProfile(refreshed, config);
+      } catch (error) {
+        if (error.identityReason !== "profile_client_id_missing") throw error;
+        throw new IdentityError("failed", "DWS 登录有效，但账号信息仍缺少授权应用 ID（clientId）。请管理员在 Gateway 的同一运行环境对当前账号重新授权，再刷新；无需先退出所有账号。原设置与待处理数据保留。");
+      }
+    }
     check(signal);
     return makeBinding(selected, config, channelRobot(config, context.config));
   };
@@ -194,14 +215,14 @@ export function createIdentityService(api, config, dependencies = {}) {
       throw error;
     }
   };
-  const initialize = async (force) => {
+  const initialize = async (force, allowAuthCheck) => {
     retiring = running ?? retiring;
     running = undefined;
     await botTask?.catch(() => {});
     await dispose(retiring);
     retiring = undefined;
     check();
-    const binding = await profile();
+    const binding = await profile(aborter.signal, allowAuthCheck);
     record = await readIdentity(context.stateDir, binding);
     check();
     await writeIdentity(context.stateDir, record, aborter.signal);
@@ -243,6 +264,7 @@ export function createIdentityService(api, config, dependencies = {}) {
     if (closed) return Promise.resolve();
     if (task) {
       forceQueued ||= force;
+      authCheckQueued ||= force && !automatic;
       return task;
     }
     clearTimeout(startupTimer);
@@ -251,20 +273,22 @@ export function createIdentityService(api, config, dependencies = {}) {
     detail = "";
     task = (async () => {
       do {
+        const allowAuthCheck = (force && !automatic) || authCheckQueued;
         force ||= forceQueued;
         forceQueued = false;
+        authCheckQueued = false;
         aborter?.abort();
         aborter = new AbortController();
         const current = aborter;
         const deadline = setTimeout(() => current.abort(), dependencies.budgetMs ?? 30000);
         try {
-          await initialize(force);
+          await initialize(force, allowAuthCheck);
         } catch (error) {
           if (closed) return;
           if (error.identityState === "stopped")
             error = new IdentityError("failed", "身份初始化超时，请稍后重新检测。", true);
           fail(error);
-          if (automatic && error.retryable && retryCount < 2 && !forceQueued) {
+          if (automatic && !allowAuthCheck && error.retryable && retryCount < 2 && !forceQueued) {
             const delay =
               dependencies.retryDelayMs ??
               Math.max(error.retryAfterMs || 0, [5000, 30000][retryCount]) +
@@ -301,6 +325,7 @@ export function createIdentityService(api, config, dependencies = {}) {
       cached = false;
       retryCount = 0;
       forceQueued = false;
+      authCheckQueued = false;
       // Do not return/await the discovery promise: both supported hosts await start().
       startupTimer = setTimeout(() => {
         void refresh(false, true);

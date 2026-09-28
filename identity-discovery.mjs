@@ -29,7 +29,12 @@ export function channelRobot(config, host) {
   }
   return clientId;
 }
-export function selectProfile(data, config) {
+const missing = (value) => value == null || (typeof value === "string" && !value.trim());
+function invalidFields(profile, fields) {
+  return fields.filter(([key]) => !token(profile[key])).map(([key, label]) =>
+    `${missing(profile[key]) ? "缺少" : "格式异常："}${label}（${key}）`);
+}
+function selectCurrentProfile(data, config, allowMissingClientId) {
   success(data);
   if (!Array.isArray(data.profiles)) bad("DWS profile 列表结构无效。");
   if (!data.currentProfile || !data.profiles.length) {
@@ -42,8 +47,9 @@ export function selectProfile(data, config) {
   );
   if (matches.length !== 1) bad("DWS 当前账号无法唯一确定，请明确选择本人账号。");
   const p = matches[0];
-  if (!token(p.corpId) || !token(p.userId) || !token(p.clientId))
-    bad("DWS 当前账号缺少有效的组织、用户或授权应用 ID。");
+  const fields = invalidFields(p, [["corpId", "组织 ID"], ["userId", "用户 ID"]]);
+  if (fields.length)
+    bad(`DWS 账号信息不完整：${fields.join("；")}。请管理员在 Gateway 的同一运行环境核对当前账号。`);
   if (p.userId !== config.ownerUserId)
     throw new IdentityError("account_mismatch", "DWS 当前登录账号与实例主人不一致，代回复已暂停。");
   if (["revoked", "unavailable"].includes(p.status))
@@ -53,7 +59,35 @@ export function selectProfile(data, config) {
   if (config.profile && ![profile, p.profile, p.corpId].includes(config.profile)) {
     throw new IdentityError("account_mismatch", "旧 profile 配置与当前账号不一致，请先迁移配置。");
   }
+  if (!token(p.clientId) && !(allowMissingClientId && missing(p.clientId))) {
+    const error = new IdentityError("failed",
+      `DWS 账号信息不完整：${invalidFields(p, [["clientId", "授权应用 ID"]]).join("；")}。登录状态尚未核实；可发送 /dws identity refresh 检查。`);
+    if (missing(p.clientId)) error.identityReason = "profile_client_id_missing";
+    throw error;
+  }
   return { profile, corpId: p.corpId, userId: p.userId, dwsClientId: p.clientId };
+}
+export const selectProfile = (data, config) => selectCurrentProfile(data, config, false);
+// Only identifies the exact account eligible for a manual auth check. This
+// incomplete result must never be used to bind a runtime or replace a cache.
+export const selectAuthCheckProfile = (data, config) => selectCurrentProfile(data, config, true);
+
+export function verifyAuthStatus(data, selected) {
+  success(data);
+  if (typeof data.authenticated !== "boolean") bad("DWS 认证检查未返回明确的登录状态。");
+  if (!data.authenticated) {
+    const localErrors = {
+      ciphertext_key_mismatch: "DWS 本地登录凭据与解密密钥不匹配。请管理员检查登录环境和密钥，保留现有凭据。",
+      dek_missing: "DWS 本地登录密钥缺失。请管理员恢复登录密钥，保留现有凭据。",
+      keychain_unavailable: "DWS 无法读取系统钥匙串。请管理员检查运行用户和钥匙串访问，保留现有凭据。",
+    };
+    if (Object.hasOwn(localErrors, data.reason)) bad(localErrors[data.reason]);
+    throw new IdentityError("waiting_login", "DWS 当前账号的登录状态未通过检查。请管理员在 Gateway 的同一运行环境对该账号重新授权，再刷新；无需先退出所有账号。");
+  }
+  if (data.corp_id !== selected.corpId || data.user_id !== selected.userId)
+    throw new IdentityError("account_mismatch", "DWS 认证检查返回的组织或用户与当前账号不一致，未继续初始化。");
+  if (data.token_valid !== true && data.refresh_token_valid !== true)
+    bad("DWS 认证检查未确认有效凭据，未继续初始化。");
 }
 export function makeBinding(profile, config, robotCode) {
   return {
