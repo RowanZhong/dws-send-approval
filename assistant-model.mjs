@@ -1,6 +1,14 @@
 import { completionAgent } from "./assistant-agent.mjs";
 import { safeText } from "./assistant-settings.mjs";
 export { completionAgent } from "./assistant-agent.mjs";
+// Never silently omit the end of a continuous-message batch. Long batches stay
+// reviewable but require a manual reply instead of drafting from partial input.
+export function completeMessage(content) {
+  if (typeof content !== "string" || content.length > 8000) {
+    throw Object.assign(new Error("Draft input exceeds the complete-input budget"), { code: "LLM_DRAFT_INPUT_TOO_LONG" });
+  }
+  return content;
+}
 export function draftFailure(error) {
   const raw = error?.code;
   const code =
@@ -10,6 +18,7 @@ export function draftFailure(error) {
         ? "LLM_COMPLETION_NOT_AUTHORIZED"
         : "DRAFT_FAILED";
   const messages = {
+    LLM_DRAFT_INPUT_TOO_LONG: "本批来信超过起草容量，未截断生成回复。请查看来信并手动填写。",
     LLM_COMPLETION_NOT_AUTHORIZED:
       "拟稿的 Agent 选择未获宿主授权，请管理员核对默认 Agent 与插件 agentId；可点“修改”手动填写回复。",
     LLM_DRAFT_AGENT_NOT_CONFIGURED:
@@ -36,7 +45,7 @@ export async function draftReply(api, config, draft, hint = "", material = "", s
         role: "user",
         content: JSON.stringify({
           requirements: draft.reply.text,
-          externalMessage: draft.event.content.slice(0, 8000),
+          externalMessage: completeMessage(draft.event.content),
           conversationContext: draft.context ?? [],
           contextStatus: draft.contextStatus,
           hint: hint.slice(0, 2000),

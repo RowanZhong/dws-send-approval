@@ -6,7 +6,8 @@ import { randomUUID } from "node:crypto";
 import { createCardTransport } from "./card-transport.mjs";
 import { createCardUpdateQueue } from "./card-update-queue.mjs";
 import { fixedReplyRows } from "./assistant-fixed-rules.mjs";
-import { createContextReader } from "./assistant-context.mjs";
+import { createContextReader, messageTime } from "./assistant-context.mjs";
+import { batchKey, batchContent, batchMembers, nextBatch, createBatchQueue } from "./assistant-batches.mjs";
 import { cardFormFields } from "./assistant-card-protocol.mjs";
 import { resolveTargets, splitTargets, resolveDisplayLabels, targetInput } from "./assistant-directory.mjs";
 import { sendExact } from "./assistant-dws.mjs";
@@ -84,6 +85,7 @@ export function createAssistant(api, config, dependencies = {}) {
   const cardUpdates = createCardUpdateQueue();
   const cardRecoveries = new Map();
   const contextReader = createContextReader(config, { runner: dependencies.historyRunner, now });
+  let batches = createBatchQueue({ now, ...dependencies.batchTiming });
   const topicQueue = createTopicQueue({ complete: dependencies.classify ?? ((content, rules, signal) => classifyTopic(api, config, content, rules, signal)), now, ...dependencies.topicQueueOptions });
   const classify = async (content, rules, valid) => normalizeTopicDecision(
     await topicQueue.run(content, rules, signal?.signal, valid), rules);
@@ -514,6 +516,18 @@ export function createAssistant(api, config, dependencies = {}) {
     if (edited !== undefined && !EDITABLE.has(d.status))
       throw new Error("本条尚不可手动发送，请查看最新状态。");
     authorizeDraft(d);
+    if (d.reply.direct && config.assistant.context.historyMinutes) {
+      const history = await contextReader.read(d, { end: now() + 1, fresh: true });
+      d = currentDraft(ref, edited !== undefined);
+      authorizeDraft(d);
+      if (history.ownerLastMessageAt >= Math.floor(messageTime(d.event.timestamp) / 1000) * 1000 &&
+          history.ownerLastMessageAt > (d.ownerReplyReviewedAt ?? 0)) {
+        store.put({ ...d, status: "stale", version: d.version + 1, updated: now(), ownerReplyAt: history.ownerLastMessageAt,
+          batch: d.batch ? { ...d.batch, closed: true } : undefined,
+          error: "检测到你已在会话中回复，本次未发送。请核对是否还需要回复。" });
+        await refreshCards(d.id); notice(store.draft(d.id)); return;
+      }
+    }
     if (edited !== undefined) {
       d = { ...d, text: safeText(edited) };
     }
@@ -525,7 +539,7 @@ export function createAssistant(api, config, dependencies = {}) {
         const result = topicDisposition(d.topic?.decision ?? { outcome: "review", reason: "changed" }, eligible,
           s, d.reply, matchingAutoRules(d.event, d.reply, s, now()), now());
         if (s.topics.enabled && d.topicRevision === s.topics.revision && result.kind === "auto") rule = result.rule;
-      } else rule = autoAnswer(d.event, d.reply, s, now());
+      } else rule = autoAnswer({ ...d.event, content: batchContent(store, d) }, d.reply, s, now());
       if (!rule || rule.id !== automaticRule.id || rule.text !== d.text) {
         store.put({ ...d, status: "stale", error: "自动答复授权已变化；请核对设置后重新确认。", updated: now() });
         return;
@@ -592,7 +606,9 @@ export function createAssistant(api, config, dependencies = {}) {
       if (closed || latestBeforeModel?.version !== version || latestBeforeModel.status !== "generating") return;
       const { messages: context, ...contextStatus } = history;
       d = store.put({ ...latestBeforeModel, contextStatus });
-      const body = await model({ ...d, context }, hint, material);
+      const input = batchContent(store, d);
+      if (input.length > 8000) throw Object.assign(new Error("Draft batch exceeds input budget"), { code: "LLM_DRAFT_INPUT_TOO_LONG" });
+      const body = await model({ ...d, event: { ...d.event, content: input }, context }, hint, material);
       const latest = store.draft(d.id);
       if (!closed && latest?.version === version && latest.status === "generating") {
         store.put({ ...latest, text: body, status: "pending", error: undefined, updated: now() });
@@ -624,17 +640,45 @@ export function createAssistant(api, config, dependencies = {}) {
       notice(store.put({ ...d, status: "inbox", error: "来信时间异常，请核实后手动处理。", updated: now() }));
       return;
     }
-    for (const previous of store.list([...PENDING])) {
-      if (previous.id !== d.id && previous.event.conversation_id === event.conversation_id) {
+    const related = store.list([...PENDING]).filter((previous) => previous.id !== d.id &&
+      previous.event.conversation_id === event.conversation_id && previous.event.sender_open_dingtalk_id === event.sender_open_dingtalk_id);
+    if (reply.direct) d = store.put({ ...d, batch: nextBatch(config, related[0], d, now()) });
+    for (const previous of related) {
+      {
         store.put({
           ...previous,
           status: "superseded",
           version: previous.version + 1,
           updated: now(),
+          supersededBy: d.id,
         });
-        track(refreshCards(previous.id));
+        for (const card of store.cardsForDraft(previous.id)) {
+          if (card.name === "draft" && !card.invalidated && card.expires > now())
+            track(show("draft", { id: d.id }, card.outTrackId, "收到新的消息，正在更新回复。").catch(() => {}));
+        }
       }
     }
+    if (reply.direct) track(batches.schedule(batchKey(config, event), () => processSnapshot(d, prefs, reply)));
+    else track(processSnapshot(d, prefs, reply));
+  }
+  async function processSnapshot(d, prefs, reply) {
+    if (closed || store.draft(d.id)?.version !== d.version || !PENDING.has(store.draft(d.id)?.status)) return;
+    if (d.batch?.memberIds.length > 1 && config.assistant.context.historyMinutes) {
+      const history = await contextReader.read(d, { end: now() + 1, fresh: true });
+      if (closed || store.draft(d.id)?.version !== d.version || !PENDING.has(store.draft(d.id)?.status)) return;
+      if (history.ownerLastMessageAt) {
+        const kept = batchMembers(store, d).filter((m) => messageTime(m.event.timestamp) > history.ownerLastMessageAt + 999);
+        if (kept.length < d.batch.memberIds.length) {
+          const members = kept.length ? kept : [d];
+          d = store.put({ ...d, batch: { ...d.batch, id: members[0].id, startedAt: members[0].created,
+            memberIds: members.map((m) => m.id), messageIds: members.map((m) => m.event.message_id),
+            closed: !kept.length }, ...(kept.length ? {} : { status: "stale", ownerReplyAt: history.ownerLastMessageAt,
+              error: "检测到你已回复，请核对最新消息后继续处理。" }) });
+          if (!kept.length) { notice(d); await refreshCards(d.id); return; }
+        }
+      }
+    }
+    const event = { ...d.event, content: batchContent(store, d) };
     const s = settings();
     d = store.put({ ...d, topicRevision: s.topics.revision,
       status: s.topics.enabled ? "classifying" : d.status });
@@ -647,7 +691,7 @@ export function createAssistant(api, config, dependencies = {}) {
       d = store.put({ ...d, status: reason === "changed" ? "stale" : "draft-error", text: "", error: TOPIC_REASONS[reason] || TOPIC_REASONS.failed,
         topic: { ...d.topic, reasonLabel: TOPIC_REASONS[reason] || TOPIC_REASONS.failed }, updated: now() });
     };
-    track((async () => {
+    return (async () => {
       if (s.topics.enabled) {
         const eligible = eligibleTopics(s.topics, event, reply);
         const classificationStartedAt = now();
@@ -695,7 +739,7 @@ export function createAssistant(api, config, dependencies = {}) {
       if (current()) review("failed");
       if (!closed) notice(store.draft(d.id));
       api.logger?.warn?.("[DWSAssistant] background operation stopped; inspect draft status");
-    }));
+    });
   }
   function selected(card, values) {
     const ids = array(values.selected);
@@ -940,7 +984,20 @@ export function createAssistant(api, config, dependencies = {}) {
     } else if (action.op === "generate") {
       await generate(card.refs[0], `${v.style}\n${v.hint}`, v.material, true);
       return show("draft", { id: card.refs[0].id }, replace);
+    } else if (action.op === "ack-owner-reply") {
+      const d = currentDraft(card.refs[0], true);
+      if (!d.ownerReplyAt || !d.text) throw new Error("请重新起草或手动填写回复。");
+      store.put({ ...d, status: "pending", ownerReplyReviewedAt: d.ownerReplyAt, version: d.version + 1, error: undefined, updated: now() });
+      return show("draft", { id: d.id }, replace, "已记录核对结果，请再次检查正文后发送。");
     } else if (action.op === "send" || action.op === "edit-send") {
+      const original = store.draft(card.refs[0]?.id);
+      if (action.op === "edit-send" && original?.supersededBy) {
+        let latest = original;
+        for (let i = 0; i < 200 && latest.supersededBy; i++) latest = store.draft(latest.supersededBy) ?? latest;
+        if (latest.id !== original.id && EDITABLE.has(latest.status)) return show("edit", { id: latest.id, draftValues: { body: v.body } }, replace,
+          "编辑期间有新消息，本次未发送。已保留输入，请核对最新消息后再次确认。");
+        throw new Error("有新消息正在处理，输入已保留；请稍后核对最新草稿。");
+      }
       await deliver(card.refs[0], action.op === "edit-send" ? v.body : undefined);
       return show("draft", { id: card.refs[0].id }, replace);
     } else if (action.op === "send-selected") {
@@ -1078,6 +1135,7 @@ export function createAssistant(api, config, dependencies = {}) {
       observedTransport = undefined;
       reconcileCardTransport();
       signal = new AbortController();
+      batches = createBatchQueue({ now, ...dependencies.batchTiming });
       if (!store.get("settings")) {
         store.set("settings", initialSettings());
       }
@@ -1100,6 +1158,7 @@ export function createAssistant(api, config, dependencies = {}) {
       clearInterval(timer);
       clearInterval(cleanupTimer);
       notifications.stop();
+      batches.stop();
       signal?.abort();
       managedTransport?.stop();
       await Promise.allSettled([...jobs, modelQueue]);

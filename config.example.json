@@ -50,6 +50,9 @@
             },
             "context": {
               "historyMinutes": 5
+            },
+            "directBatch": {
+              "mergeGapSeconds": 30
             }
           }
         }

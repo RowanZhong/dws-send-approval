@@ -1,6 +1,7 @@
 import { buildTopicView } from "./assistant-topic-views.mjs";
 import { buildConfigView } from "./assistant-config-views.mjs";
 import { targetInput } from "./assistant-directory.mjs";
+import { batchMembers } from "./assistant-batches.mjs";
 import { PENDING, EDITABLE } from "./assistant-store.mjs";
 
 const button = (label, op, extra = {}) => ({ label, op, ...extra });
@@ -215,6 +216,13 @@ export function buildView(name, state, args = {}) {
       pending: "将以你的身份回复",
     }[d.status] ?? "回复草稿") + " · 完整正文";
     view.description = `${draftStatusLabel(d)}\n${d.reply.direct ? "私聊回复" : "引用回复此条群消息"}\n原消息：${d.event.content.slice(0, 3000)}\n\n${bodyTitle}：\n${draftBodyLabel(d)}${d.error ? `\n${d.error}` : ""}${d.topic ? `\n\n消息主题：${d.topic.name || "未确定"} · ${d.topic.reasonLabel || "待核对"}` : ""}`;
+    if (d.batch?.memberIds.length > 1) {
+      const members = batchMembers(store, d);
+      view.description = `${draftStatusLabel(d)}\n连续收到 ${members.length} 条，展示最近 ${Math.min(3, members.length)} 条\n\n` +
+        members.slice(-3).map((m) => `${new Date(m.event.timestamp < 100000000000 ? m.event.timestamp * 1000 : m.event.timestamp).toLocaleTimeString("zh-CN", { timeZone: settings.notifications.timezone, hour12: false })}\n${m.event.content.slice(0, 1000)}`).join("\n\n") +
+        `\n\n${bodyTitle}：\n${draftBodyLabel(d)}${d.error ? `\n${d.error}` : ""}`;
+    }
+    if (d.contextStatus?.partial) view.description += "\n\n近期上下文未完整取得；请核对回复，也可补充资料后重新起草。";
     view.refs = [{ id: d.id, version: d.version }];
     if (name === "edit") {
       view.description = `接收对象与原消息不变。${d.reply.direct ? "" : "发送时引用此条群消息。"}修改后点击发送即发送输入框中的完整正文。\n原消息：${d.event.content.slice(0, 160)}`;
@@ -261,6 +269,7 @@ export function buildView(name, state, args = {}) {
       ];
     } else if (PENDING.has(d.status)) {
       view.buttons = [
+        ...(d.ownerReplyAt && d.text && d.status === "stale" ? [button("已核对，仍需回复", "ack-owner-reply")] : []),
         ...(d.status === "pending" ? [button("发送", "send")] : []),
         ...(EDITABLE.has(d.status) ? [button("修改", "edit", { id: d.id })] : []),
         button("重新拟稿", "regenerate", { id: d.id }),

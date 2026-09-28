@@ -164,6 +164,18 @@
                 "description": "近期对话文字窗口（分钟），0 关闭；不读取附件"
               }
             }
+          },
+          "directBatch": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mergeGapSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 300,
+                "default": 30
+              }
+            }
           }
         }
       }

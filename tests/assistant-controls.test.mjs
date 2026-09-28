@@ -107,6 +107,7 @@ test("card callback returns promptly while a send is still in progress", async (
     outTrackId: c.outTrackId,
     values: {},
   });
+  await new Promise(setImmediate); // bounded history preflight precedes the durable send claim
   assert.equal(f.assistant.store.draft(d.id).status, "sending");
   release();
   await f.assistant.idle();

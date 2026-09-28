@@ -66,6 +66,7 @@ export async function fixture(t, overrides = {}, configOverrides = {}) {
       throw Error("directory unavailable in this fixture");
     },
     historyRunner: async () => ({ contractVersion: "im.message-list.v1", messages: [], complete: true }),
+    batchTiming: { quietMs: 0, waitMs: 0 },
     ...overrides,
   });
   assistant.bind({

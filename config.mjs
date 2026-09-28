@@ -70,6 +70,12 @@ export function readConfig(raw = {}, { discovery = false } = {}) {
     throw new Error("assistant.context.historyMinutes must be 0..60");
   }
   assistant.context = Object.freeze(context);
+  const directBatch = { mergeGapSeconds: 30, ...assistant.directBatch };
+  if ((assistant.directBatch !== undefined && (!assistant.directBatch || typeof assistant.directBatch !== "object" || Array.isArray(assistant.directBatch))) ||
+      !Number.isInteger(directBatch.mergeGapSeconds) || directBatch.mergeGapSeconds < 1 || directBatch.mergeGapSeconds > 300) {
+    throw new Error("assistant.directBatch.mergeGapSeconds must be 1..300");
+  }
+  assistant.directBatch = Object.freeze(directBatch);
   if (
     typeof assistant.enabled !== "boolean" ||
     typeof assistant.cardTemplateId !== "string" ||
