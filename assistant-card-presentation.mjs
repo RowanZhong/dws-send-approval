@@ -6,10 +6,16 @@ export function literal(value) {
     .replace(/([\\`*_{}\[\]()#+.!|~\-$@])/g, "\\$1");
 }
 export function textParagraphs(value) {
-  // DingTalk's MarkdownBlock indents continuation lines after a Markdown
-  // two-space hard break; a bare newline is collapsed. Paragraph boundaries
-  // preserve the visible line breaks without inserting whitespace into text.
+  // DWS personal-message transport uses this encoder. Keep its established
+  // paragraph representation separate from the card-only compact layout.
   return literal(value).replace(/\r\n?/g, "\n").replace(/\n+/g, "\n\n");
+}
+export function cardText(value) {
+  // Escape the source before adding our own line-break tags. DingTalk collapses
+  // bare newlines and indents Markdown hard breaks; <br> keeps adjacent lines
+  // compact and left aligned. Only source blank lines start a new paragraph.
+  return literal(value).replace(/\r\n?/g, "\n").split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/\n/g, "<br>")).join("\n\n");
 }
 // Status, headings and list items are single logical lines. User-supplied names
 // may contain newlines; do not let those create Markdown continuation lines.
@@ -45,12 +51,17 @@ export function plainContent(content) {
 }
 export function renderContent(view, notice = "") {
   const c = view.content;
-  const section = (s) => [s.title && `**${inlineLiteral(s.title)}**`, textParagraphs(s.text)].filter(Boolean).join("\n\n");
+  const section = (s) => [s.title && `**${inlineLiteral(s.title)}**`, cardText(s.text)].filter(Boolean).join("<br>");
+  const body = (c.sections ?? []).map((s, i) =>
+    (i ? s.dividerBefore ? "\n\n---\n\n" : "\n\n" : "") + section(s)).join("");
+  // A single existing MarkdownBlock avoids stacking four component margins.
+  // Explicitly clear the other slots when updating cards from earlier versions.
+  // Keep the v3 template contract, persisted page model and callbacks unchanged.
   return {
-    content_status: c.status ? `**${inlineLiteral(c.status)}**` : "",
-    content_summary: (c.summary ?? []).map((v) => `- ${inlineLiteral(v)}`).join("\n"),
-    content_body: (c.sections ?? []).map(section).join("\n\n---\n\n"),
-    content_notice: [notice, ...(c.notices ?? [])].filter(Boolean).map(textParagraphs).join("\n\n"),
+    content_status: "", content_summary: "", content_notice: "",
+    content_body: [c.status && `**${inlineLiteral(c.status)}**`,
+      (c.summary ?? []).map((v) => `- ${inlineLiteral(v)}`).join("\n"),
+      ...[notice, ...(c.notices ?? [])].filter(Boolean).map(cardText), body].filter(Boolean).join("\n\n"),
   };
 }
 export function inactiveContent(card, now) {
@@ -65,7 +76,7 @@ export function inactiveContent(card, now) {
     : `${card.invalidated || "卡片已到期"}。\n请发送 /dws 打开新卡；已保存设置仍按原有效期生效。`;
   return {
     title: companyMigration ? "公司授权方式已更新" : upgrade ? "助手已升级" : "代回复助手 · 已失效", description,
-    ...(card.presentationVersion === 3 ? { content_status: upgrade ? "助手已升级" : "卡片已失效", content_summary: "", content_body: textParagraphs(description), content_notice: "" } : {}),
+    ...(card.presentationVersion === 3 ? renderContent({ content: { status: upgrade ? "助手已升级" : "卡片已失效", sections: [{ text: description }] } }) : {}),
     card_status: canOpen ? "pending" : "expired", card_expires_note: "也可发送 /dws 打开助手", form: { fields: [] },
     ...Object.fromEntries(Array.from({ length: 6 }, (_, i) => [[`button${i + 1}`, i === 0 && canOpen ? "打开新版助手" : ""],
       [`action${i + 1}`, i === 0 && canOpen ? `dws-assistant:${card.id}:0` : ""]]).flat()),

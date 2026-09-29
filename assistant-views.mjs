@@ -302,7 +302,7 @@ export function buildView(name, state, args = {}) {
     if (name === "draft") view.content = {
       status: draftStatusLabel(d), summary: [draftLabel(d, directory), d.reply.direct ? "私聊回复" : "引用回复此条群消息", ...(allMembers.length > 1 ? [`连续收到 ${allMembers.length} 条，展示最近 ${members.length} 条`] : [])],
       sections: [...members.map((m) => { const preview = excerpt(m.event.content, 1000); return { title: `来信 · ${time(m)}`, text: preview.text + (preview.truncated ? "\n（已截取预览，请查看来信全文）" : "") }; }),
-        { title: bodyTitle, text: draftBodyLabel(d) }],
+        { title: bodyTitle, text: draftBodyLabel(d), dividerBefore: true }],
       notices: [d.error, d.topic && `消息主题：${d.topic.name || "未明确命中"} · ${d.topic.reasonLabel || "按当前规则处理"}`,
         contextNotice,
         d.status === "unknown" && "发送结果尚未核实，请先检查会话记录。不会自动重发。"].filter(Boolean),
@@ -329,7 +329,7 @@ export function buildView(name, state, args = {}) {
     view.title = "确认发送所选回复";
     view.refs = rows.map(({ id, version }) => ({ id, version }));
     view.content = { status: valid ? `待确认 · ${rows.length} 条` : "内容或状态已变化", summary: ["以下各条将以你的身份发送。"],
-      sections: rows.map((r, i) => ({ title: `回复 ${i + 1} · ${r.label}`, text: r.text })),
+      sections: rows.map((r, i) => ({ title: `回复 ${i + 1} · ${r.label}`, text: r.text, dividerBefore: true })),
       notices: valid ? [] : ["本页已不能发送，请返回待处理列表重新选择并核对。"] };
     view.buttons = [...(valid ? [button("确认发送以上全部", "confirm-batch")] : []), button("返回待处理", "inbox")];
   } else if (name === "inbox" || name === "history") {

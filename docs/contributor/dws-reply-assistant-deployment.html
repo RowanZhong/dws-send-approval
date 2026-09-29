@@ -40,7 +40,7 @@
 /* Uses the same content model as the new DingTalk card; external text is literal. */
 .description{white-space:normal}.preview-status{display:inline-block;font-weight:650;color:#12684f;background:#edf8f2;border-radius:6px;padding:4px 10px;margin-bottom:12px}.preview-summary{margin:0 0 16px;padding:0;list-style:none;color:#627082}.preview-summary li{margin:3px 0;font-size:12px}.preview-section{border-top:1px solid #e4eaf0;padding:14px 0 3px;scroll-margin:0}.preview-section h4{font-size:13px;color:#243d52;margin:0 0 8px!important;line-height:1.6}.preview-section p{margin:0 0 12px;white-space:pre-wrap;line-height:1.85;overflow-wrap:anywhere}.preview-notice{margin:12px 0 0;padding:10px 12px;border-left:3px solid #d49b35;border-radius:0 6px 6px 0;background:#fff7e8;color:#74591e;white-space:pre-wrap;font-size:12px}.actions button.primary{background:#176bdd;color:#fff}.actions{gap:6px}.actions button{font-size:13px;font-weight:500}.demo #page-picker{margin:8px 0 12px}.preview-status+.preview-section{margin-top:4px}
 </style></head><body data-guide="developer"><header><div class="edition">FIELD GUIDE / 2026.09 · 使用与部署指南</div><div class="eyebrow">DINGTALK · PERSONAL REPLY ASSISTANT</div><h1>钉钉个人代回复助手<br>技术方案与安装配置</h1><p>面向开发人员与平台管理员：架构、部署、身份绑定、模板发布、验证与运维。</p><div class="badges"><span>main · 双版必要真机验收完成</span><span>OpenClaw 2026.7.1-2 / 2026.8.1</span><span>默认关闭监听</span><span>开发与运维</span></div><div class="journey"><div><b>01 · 理清边界</b><small>架构与可信身份</small></div><div><b>02 · 统一部署</b><small>配置模板与员工隔离</small></div><div><b>03 · 可复核交付</b><small>测试、性能与运维</small></div></div></header><div class="layout"><aside><strong>CONTENTS · 阅读导航</strong><a href="#sec-1">1. 整体方案与定向控制原理 </a><a href="#sec-2">2. 技术架构与边界 </a><a href="#sec-3">3. 管理员安装、升级和卡片模板 </a><a href="#sec-4">4. 配置项从哪里来 </a><a href="#sec-5">5. 15000 个 Pod 的统一部署 </a><a href="#sec-6">6. 独立维护边界 </a><a href="#sec-7">7. 验证、性能与交付状态 </a><a href="#sec-8">8. 卡片协议、组件与发布验收 </a><a href="#sec-9">9. 开发、打包与交付 </a></aside><main><nav class="doc-switch"><a href="../user/dws-reply-assistant-manual.html">员工使用手册 ↗</a><a href="#sec-1">从第一节开始 ↓</a></nav><article>
-<p><strong>开发及运维指南 · 插件 0.9.0 · 2026-09-29 · 公司授权应用迁移双宿主隔离验收通过</strong></p>
+<p><strong>开发及运维指南 · 插件 0.9.1 · 2026-09-29 · 助手卡片正文排版优化</strong></p>
 <p>面向开发人员和平台管理员。员工操作另见<a href="./../user/dws-reply-assistant-manual.html">员工使用手册</a>。适用一名员工一个 Pod、独立 OpenClaw 实例；兼容验证覆盖 OpenClaw 2026.7.1-2 与 2026.8.1。</p>
 <section class="doc-section" id="sec-1"><h2 id="_1-整体方案与定向控制原理" tabindex="-1">1. 整体方案与定向控制原理 <a class="header-anchor" href="#_1-整体方案与定向控制原理" aria-label="Permalink to &quot;1. 整体方案与定向控制原理&quot;">&ZeroWidthSpace;</a></h2>
 <p>这套方案为每名员工的独立 OpenClaw 实例增加一条<strong>受控的个人消息处理流程</strong> ：DWS 用员工已登录的身份接收消息，自定义插件按员工设置筛选来源、识别消息主题、生成草稿并管理授权，社区钉钉插件负责投递卡片和接收本人操作。员工可以确认后发送，也可以提前授权有范围、有期限的固定答复。平台统一部署代码和配置模板，员工自己的身份、监听偏好与状态保留在各自 Pod 的持久化目录中。</p>
@@ -149,7 +149,7 @@
 </section><section class="doc-section" id="sec-3"><h2 id="_3-管理员安装、升级和卡片模板" tabindex="-1">3. 管理员安装、升级和卡片模板 <a class="header-anchor" href="#_3-管理员安装、升级和卡片模板" aria-label="Permalink to &quot;3. 管理员安装、升级和卡片模板&quot;">&ZeroWidthSpace;</a></h2>
 <h3 id="独立项目与版本组合" tabindex="-1">独立项目与版本组合 <a class="header-anchor" href="#独立项目与版本组合" aria-label="Permalink to &quot;独立项目与版本组合&quot;">&ZeroWidthSpace;</a></h3>
 <p>从 0.8.0 起，助手在独立项目 <code>dws-send-approval</code> 中维护，同一个安装包适配两版宿主。不再向两个社区插件仓库复制业务源码。</p>
-<p>当前安装包为 <strong>0.9.0</strong>。本次新增公司统一 DWS 授权应用策略、存量绑定迁移及中断恢复，配置见<a href="#company-app-migration">公司统一授权应用切换</a>。升级包本身不会启用该策略，管理员需显式下发 <code>identityPolicy</code>；未配置时沿用原身份校验。公司应用迁移会暂停原自动授权、将旧未完成草稿保留为只读，员工需在迁移完成后重新授权自动回复。插件 ID、状态目录和原配置保持兼容，工具起草仍默认关闭。</p>
+<p>当前安装包为 <strong>0.9.1</strong>，本次优化卡片排版，配置保持不变。0.9.0 新增的公司统一 DWS 授权应用策略、存量绑定迁移及中断恢复继续保留，配置见<a href="#company-app-migration">公司统一授权应用切换</a>。升级包本身不会启用该策略，管理员需显式下发 <code>identityPolicy</code>；未配置时沿用原身份校验。公司应用迁移会暂停原自动授权、将旧未完成草稿保留为只读，员工需在迁移完成后重新授权自动回复。插件 ID、状态目录和原配置保持兼容，工具起草仍默认关闭。</p>
 <div class="table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0"><table>
 <thead>
 <tr>
@@ -190,10 +190,17 @@ npm pack --ignore-scripts
 npm test
 npm run pack:local
 npm run pack:check
-openclaw plugins install ./artifacts/dws-send-approval-0.9.0.tgz
+openclaw plugins install ./artifacts/dws-send-approval-0.9.1.tgz
 </code></pre></figure>
 <p>已有同名插件时按当前 OpenClaw 的本地插件更新流程替换代码。开发调试也可把 <code>plugins.load.paths</code> 中的旧 <code>examples/dws-send-approval</code> 路径替换为本独立目录；不要同时加载两份 <code>dws-send-approval</code>。插件条目仍叫 <code>dws-send-approval</code>，监听默认值仍为 <code>listener.enabled:false</code>。</p>
 <p>首次部署先配置员工身份和卡片模板，暂关闭插件条目；安装完成后启用条目。已有员工的是否开启、范围、回复规则和主题授权从原状态恢复，部署不会代替员工更改选择。</p>
+<h3 id="从-0-9-0-升级到-0-9-1" tabindex="-1">从 0.9.0 升级到 0.9.1 <a class="header-anchor" href="#从-0-9-0-升级到-0-9-1" aria-label="Permalink to &quot;从 0.9.0 升级到 0.9.1&quot;">&ZeroWidthSpace;</a></h3>
+<ol>
+<li>保留员工持久卷、OpenClaw 配置、已发布的 <code>assistant.cardTemplateId</code> 和 <code>assistant.cards.presentationVersion</code>，更新助手安装包并重启实例。Channel 和 DWS 无需为本次排版优化更换版本，不需要重新登录或执行数据迁移。</li>
+<li>v3 使用现有 <code>content_body</code> 组件统一排版，同时显式清空 <code>content_status</code>、<code>content_summary</code>、<code>content_notice</code>，避免多个组件边距叠加；四个变量和回调协议仍兼容，无需重新发布或更换模板。正文先按字面转义，再将单换行编码为 <code>&lt;br&gt;</code>，原有空行仍分段。</li>
+<li>新建或刷新页面采用紧凑排版；已发出的有效卡片继续可用，后台更新或按钮翻页后采用新排版。不触发模板迁移或旧卡停用。展示版本 2 保持原纯文本呈现。</li>
+<li>对消息来信、草稿存储、编辑表单和实际发送内容不做格式改写。DWS 发送路径保留既有段落编码，不能把卡片用的 <code>&lt;br&gt;</code> 写入发送正文。部署应记录 <code>0.9.1</code> 与实际 Git 提交，企业灰度时检查常用卡片与按钮。</li>
+</ol>
 <h3 id="从原来的-0-7-0-抽离版本迁移" tabindex="-1">从原来的 0.7.0 抽离版本迁移 <a class="header-anchor" href="#从原来的-0-7-0-抽离版本迁移" aria-label="Permalink to &quot;从原来的 0.7.0 抽离版本迁移&quot;">&ZeroWidthSpace;</a></h3>
 <ol>
 <li>备份 OpenClaw 配置与该员工的整个状态目录/PVC；记录当前 Channel 分支和版本。维护窗口可先用 <code>/dws-listen off</code> 暂停，结束后由员工恢复。</li>
@@ -736,7 +743,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 </ol>
 <p>公司策略启用后，初始化增加一次 <code>auth status</code> 验证；已就绪的 <code>/dws</code>、消息接入及实际发送前也检查当前 profile，防止缓存掩盖员工重新授权导致的变化。无固定周期登录轮询；不阻塞 Gateway 服务启动。员工数据量影响本地一致性检查和备份耗时，需给状态卷预留至少一份数据库快照的空间。真实新公司应用的权限及企业级限流必须由灰度验证，本地双宿主验收不代表已测试 15000 Pod 容量。</p>
 <h3 id="单实例配置" tabindex="-1">单实例配置 <a class="header-anchor" href="#单实例配置" aria-label="Permalink to &quot;单实例配置&quot;">&ZeroWidthSpace;</a></h3>
-<p>下面示例与包内 <a href="../../config.example.json"><code>config.example.json</code></a> 一致，适用于 <strong>0.9.0 和两版宿主</strong>，显式列出常用参数及默认值。它是合并到现有 <code>openclaw.json</code> 的片段，不能替代整份宿主配置：保留已有 <code>channels</code>、<code>agents</code>、模型与凭据、Web 权限、其他插件及加载路径；使用 <code>plugins.allow</code> 时追加本插件 ID。<code>approvals.plugin</code> 用于兼容旧审批，保留其他插件现有审批配置，不直接用示例数组覆盖原数组。</p>
+<p>下面示例与包内 <a href="../../config.example.json"><code>config.example.json</code></a> 一致，适用于 <strong>0.9.1 和两版宿主</strong>，显式列出常用参数及默认值。它是合并到现有 <code>openclaw.json</code> 的片段，不能替代整份宿主配置：保留已有 <code>channels</code>、<code>agents</code>、模型与凭据、Web 权限、其他插件及加载路径；使用 <code>plugins.allow</code> 时追加本插件 ID。<code>approvals.plugin</code> 用于兼容旧审批，保留其他插件现有审批配置，不直接用示例数组覆盖原数组。</p>
 <p>替换本人 <code>OWNER_STAFF_ID</code>、实际 DWS 绝对路径、已发布模板 ID，并将 <code>main</code>、<code>default</code> 改为实例实际的无工具拟稿 Agent 和钉钉账号。<strong>该基础示例默认不启用公司授权限制、不开放工具、沿用展示版本 2；公司的本次统一应用切换还必须合并下方 <code>identityPolicy</code>，使用新版富文本模板还须把展示版本改为 3。</strong></p>
 <!-- single-instance-config:config.example.json -->
 <figure class="code-block"><figcaption>JSON 配置</figcaption><pre tabindex="0" aria-label="JSON 配置"><code>{
@@ -897,8 +904,10 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <p>助手项目不包含完整的 Channel，也不直接持有社区机器人的密钥或另建 Stream 连接。通用客户端在 <code>vendor/</code> 中保存固定版本与 MIT 声明，通过进程内注册表调用已经加载的 Channel；旧桥接仅为兼容已有部署。</p>
 <p>接口可用时，临时断线或请求错误不会触发跨接口重试。切换接口导致旧操作卡停用，业务状态保留。接口升级应连同宿主版本、补丁校验值与卡片真机回归一起验收。</p>
 <h3 id="_0-9-0-的配置与验收范围" tabindex="-1">0.9.0 的配置与验收范围 <a class="header-anchor" href="#_0-9-0-的配置与验收范围" aria-label="Permalink to &quot;0.9.0 的配置与验收范围&quot;">&ZeroWidthSpace;</a></h3>
-<p>0.9.0 包含此前功能与身份修复（代码基线 <code>6662d54</code>）及公司统一授权应用迁移（代码基线 <code>db9ab97</code>），两轮均已完成各自的双版必要真机验收。专用 Agent 的两版完整配置、路由、启用验证和排错见<a href="#draft-agent-setup">第 3 节</a>；参数、模板迁移及接口限制见<a href="read-only-drafting.md">只读起草能力与限制</a>。完整证据与未覆盖范围见 <a href="../plans/2026-09-28-development-record.md">2026-09-28 执行记录</a>、<a href="../plans/2026-09-28-identity-recovery.md">身份修复记录</a>及<a href="../plans/2026-09-29-company-app-migration.md">公司授权迁移记录</a>。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。部署应记录 <code>0.9.0</code> 和实际 Git 提交，并从对应源码打包；版本号不能代替提交标识或企业灰度验收。</p>
+<p>0.9.0 包含此前功能与身份修复（代码基线 <code>6662d54</code>）及公司统一授权应用迁移（代码基线 <code>db9ab97</code>），两轮均已完成各自的双版必要真机验收。专用 Agent 的两版完整配置、路由、启用验证和排错见<a href="#draft-agent-setup">第 3 节</a>；参数、模板迁移及接口限制见<a href="read-only-drafting.md">只读起草能力与限制</a>。完整证据与未覆盖范围见 <a href="../plans/2026-09-28-development-record.md">2026-09-28 执行记录</a>、<a href="../plans/2026-09-28-identity-recovery.md">身份修复记录</a>及<a href="../plans/2026-09-29-company-app-migration.md">公司授权迁移记录</a>。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。该轮部署应记录 <code>0.9.0</code> 和实际 Git 提交，并从对应源码打包；版本号不能代替提交标识或企业灰度验收。</p>
 </section><section class="doc-section" id="sec-7"><h2 id="_7-验证、性能与交付状态" tabindex="-1">7. 验证、性能与交付状态 <a class="header-anchor" href="#_7-验证、性能与交付状态" aria-label="Permalink to &quot;7. 验证、性能与交付状态&quot;">&ZeroWidthSpace;</a></h2>
+<h3 id="_0-9-1-排版验证" tabindex="-1">0.9.1 排版验证 <a class="header-anchor" href="#_0-9-1-排版验证" aria-label="Permalink to &quot;0.9.1 排版验证&quot;">&ZeroWidthSpace;</a></h3>
+<p>本轮仅调整呈现：统一富文本容器、紧凑换行、标题与正文间距、保留发送内容分界；配置和数据结构不变。新一轮检查与真机证据单独记录在<a href="../plans/2026-09-29-v0.9.1-card-spacing.md">0.9.1 排版验收记录</a>，不将下方历史功能验收作为本次验证。</p>
 <h3 id="_0-9-0-验收范围总览" tabindex="-1">0.9.0 验收范围总览 <a class="header-anchor" href="#_0-9-0-验收范围总览" aria-label="Permalink to &quot;0.9.0 验收范围总览&quot;">&ZeroWidthSpace;</a></h3>
 <p>0.9.0 汇总 2026-09-28 的功能优化与 2026-09-29 的公司授权迁移。两版实际宿主 SDK 校验与必要真机验收已完成；版本打包时全量 414 项测试通过。两轮使用的夹具、真人来信、真实模型和真实卡片回调分别记录，不将配置格式校验等同于业务真机验证。</p>
 <ul>
@@ -1084,7 +1093,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <tr>
 <td>v3 MarkdownBlock 正文分区</td>
 <td>content_status、content_summary、content_body、content_notice</td>
-<td>分别展示状态、摘要、分节正文和提示；对外来文字做字面转义并按段落保留换行，不更改原草稿正文</td>
+<td>0.9.1 在 content_body 中统一展示状态、摘要、提示和分节正文，其他三槽清空；正文先转义，单换行用 <code>&lt;br&gt;</code>，空行保留为段落，不更改原草稿正文</td>
 </tr>
 <tr>
 <td>有效期备注</td>
@@ -1114,7 +1123,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 </tbody>
 </table></div>
 <p>钉钉官方提供<a href="https://github.com/open-dingtalk/dingtalk-card-examples" target="_blank" rel="noreferrer">模板导入示例</a>、<a href="https://open.dingtalk.com/document/dingstart/using-event-chains-for-card-interaction" target="_blank" rel="noreferrer">事件链能力</a>与<a href="https://opensource.dingtalk.com/developerpedia/docs/explore/tutorials/stream/bot/go/card-callback/" target="_blank" rel="noreferrer">卡片回调示例</a>。这些文档证明能力存在，不能替代本模板在目标租户的实际验收。</p>
-<p>展示版本 2 使用重新分段的 <code>description</code>；版本 3 使用四个富文本变量。动态表单与回调协议共用，配置只维护一个当前模板 ID。下列早期页面记录描述当时模板；启用 v3 必须按第 3 节发布配套模板，不能把历史“无需重新发布模板”理解为旧模板会自动获得富文本组件。</p>
+<p>展示版本 2 使用重新分段的 <code>description</code>；版本 3 保留四个富文本变量的模板契约，0.9.1 使用 <code>content_body</code> 统一呈现并清空其余三槽。动态表单与回调协议共用，配置只维护一个当前模板 ID。下列早期页面记录描述当时模板；启用 v3 必须按第 3 节发布配套模板，不能把历史“无需重新发布模板”理解为旧模板会自动获得富文本组件。</p>
 <p>模板发布流程：新建专用模板 → 导入 JSON → 编译/预览 → 发布 → 取得模板 ID → 确认机器人可使用 → 配置并构建插件 → 重启 Gateway → 确认 Stream 已连接 → 本人私聊 <code>/dws</code> → 操作按钮并检查真实回调。不要覆盖既有问卷模板。</p>
 <h3 id="早期页面验收记录-先于-n1-o1-o2-核心联调" tabindex="-1">早期页面验收记录（先于 N1 / O1 / O2 核心联调） <a class="header-anchor" href="#早期页面验收记录-先于-n1-o1-o2-核心联调" aria-label="Permalink to &quot;早期页面验收记录（先于 N1 / O1 / O2 核心联调）&quot;">&ZeroWidthSpace;</a></h3>
 <p>环境：2026-09-24，macOS 钉钉桌面客户端，OpenClaw Test 测试组织。同一个专用模板先后接入 OpenClaw <strong>2026.8.1</strong> 和 <strong>2026.7.1-2</strong> ，每次都构建 runtime、确认实际工作树路径与 Stream 连接；两个宿主没有同时占用机器人连接。</p>

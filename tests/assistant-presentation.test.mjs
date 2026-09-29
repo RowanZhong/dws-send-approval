@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { fixture } from "./assistant-fixture.mjs";
-import { literal, excerpt, renderContent, textParagraphs, inactiveContent, PRESENTATION_PAGES } from "../assistant-card-presentation.mjs";
+import { literal, excerpt, renderContent, cardText, textParagraphs, inactiveContent, PRESENTATION_PAGES } from "../assistant-card-presentation.mjs";
 import { buildView, draftStatusLabel, draftBodyLabel } from "../assistant-views.mjs";
 import { initialSettings } from "../assistant-settings.mjs";
 const rich = { assistant: { cardTemplateId: "rich.schema", cards: { presentationVersion: 3 } } };
@@ -10,17 +10,20 @@ test("DingTalk multiline text keeps left alignment without changing the source b
   const text = "苹果17个\r\n梨子23个\n香蕉31根";
   const view = { content: { sections: [{ title: "完整正文", text }], notices: ["第一行\n第二行"] } };
   const rendered = renderContent(view);
-  assert.equal(rendered.content_body, "**完整正文**\n\n苹果17个\n\n梨子23个\n\n香蕉31根");
-  assert.equal(rendered.content_notice, "第一行\n\n第二行");
+  assert.equal(rendered.content_body, "第一行<br>第二行\n\n**完整正文**<br>苹果17个<br>梨子23个<br>香蕉31根");
+  assert.equal(rendered.content_notice, "");
   assert.equal(view.content.sections[0].text, text);
   assert.equal(textParagraphs("第一段\n\n第二段"), "第一段\n\n第二段");
+  assert.equal(textParagraphs("第一行\n第二行"), "第一行\n\n第二行", "message transport stays unchanged");
+  assert.equal(cardText("第一行\r第二行\r\n\r\n第三行"), "第一行<br>第二行\n\n第三行");
+  assert.equal(cardText("<br>\n<b>原文</b> &amp;"), "&lt;br&gt;<br>&lt;b&gt;原文&lt;/b&gt; &amp;amp;");
 });
 test("multiline names cannot create Markdown continuation lines in headings or summaries", () => {
   const rendered = renderContent({ content: { status: "状态\n说明", summary: ["名称\r\n第二行", "另一个对象"], sections: [{ title: "主题\n名称", text: "第一行\n第二行" }] } }, "操作提示\r\n下一步");
-  assert.equal(rendered.content_status, "**状态 说明**");
-  assert.equal(rendered.content_summary, "- 名称 第二行\n- 另一个对象");
-  assert.equal(rendered.content_body, "**主题 名称**\n\n第一行\n\n第二行");
-  assert.equal(rendered.content_notice, "操作提示\n\n下一步");
+  assert.equal(rendered.content_status, "");
+  assert.equal(rendered.content_summary, "");
+  assert.equal(rendered.content_notice, "");
+  assert.equal(rendered.content_body, "**状态 说明**\n\n- 名称 第二行\n- 另一个对象\n\n操作提示<br>下一步\n\n**主题 名称**<br>第一行<br>第二行");
   for (const card of [{}, { upgrade: true }, { upgrade: true, upgradeRecovery: {} }]) {
     const data = inactiveContent({ ...card, name: "edit", presentationVersion: 3, expires: 2000 }, 1000);
     assert.doesNotMatch(data.content_body, /[^\n]\n[^\n]/);
@@ -36,7 +39,7 @@ test("card paragraph layout preserves multiline form values and the actual sent 
   await f.assistant.show("edit", { id: d.id });
   assert.ok(f.cards.at(-1).data.form.fields.some(field => field.defaultValue === body));
   const card = await f.assistant.show("draft", { id: d.id });
-  assert.ok(f.assistant.store.getCard(card.id).renderedData.content_body.includes("苹果17个\n\n梨子23个\n\n香蕉31根"));
+  assert.ok(f.assistant.store.getCard(card.id).renderedData.content_body.includes("苹果17个<br>梨子23个<br>香蕉31根"));
   await f.act(card, "send");
   assert.equal(f.assistant.store.draft(d.id).text, body);
   assert.equal(f.sends.length, 1);
@@ -62,7 +65,7 @@ test("upgrade revokes old sends before painting and opens the current task exact
   const target = f.assistant.store.getCard(old.id).upgradeRecovery.targetTrack;
   const current = f.assistant.store.cardForTrack(target);
   assert.equal(current.name, "draft"); assert.equal(current.refs[0].id, d.id);
-  assert.match(f.cards.find(c => c.outTrackId === target).data.content_notice, /本次点击未执行发送/);
+  assert.match(f.cards.find(c => c.outTrackId === target).data.content_body, /本次点击未执行发送/);
   assert.equal(f.cards.filter(c => c.outTrackId === target).length, 1);
   await f.act(current, "send"); assert.equal(f.sends.length, 1);
 });
@@ -122,8 +125,10 @@ test("all original and new pages render structured content with bounded actions 
     const view = buildView(name, state, args), rendered = renderContent(view);
     assert.ok(view.content, name); assert.ok(view.buttons.length <= 6, name); assert.equal(typeof rendered.content_body, "string", name);
     assert.ok(view.content.status || view.content.sections.length || view.content.notices.length, name);
-    for (const key of ["content_body", "content_notice"]) assert.doesNotMatch(rendered[key], /[^\n]\n[^\n]/, `${name}: ${key} uses paragraph boundaries`);
-    assert.ok(rendered.content_summary.split("\n").every(line => !line || line.startsWith("- ")), `${name}: summary items stay on logical lines`);
+    for (const paragraph of rendered.content_body.split(/\n\n/)) {
+      assert.ok(!paragraph.includes("\n") || paragraph.split("\n").every(line => line.startsWith("- ")), `${name}: only list items use bare newlines`);
+    }
+    for (const key of ["content_status", "content_summary", "content_notice"]) assert.equal(rendered[key], "", `${name}: clear previous template slot`);
   }
   const template = JSON.parse(JSON.parse(await readFile(new URL("../templates/dws-reply-assistant-card-v3.json", import.meta.url))).editorData);
   const tree = template.schema.componentsTree[0];

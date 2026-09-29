@@ -17,7 +17,7 @@ export function createIdentityNotice(config, dependencies = {}) {
             transport = dependencies.transport ?? createCardTransport(config, () => false);
             transport.start();
           }
-          const body = `${COMPANY_AUTH_PARAGRAPHS[0]}\n\n${COMPANY_AUTH_PARAGRAPHS[1]}\n\n**下一步：**\n\n${COMPANY_AUTH_PARAGRAPHS[2]}`;
+          const body = `${COMPANY_AUTH_PARAGRAPHS[0]}\n\n${COMPANY_AUTH_PARAGRAPHS[1]}\n\n**下一步：**<br>${COMPANY_AUTH_PARAGRAPHS[2]}`;
           await transport.sendCard({ accountId: config.accountId, ownerUserId: config.ownerUserId,
             templateId: config.assistant.cardTemplateId, outTrackId: `dws-assistant-${randomUUID()}`,
             data: { title: COMPANY_AUTH_TITLE, description: COMPANY_AUTH_PARAGRAPHS.map((s, i) => i === 2 ? `下一步：${s.replaceAll("`", "")}` : s).join("\n\n"),
