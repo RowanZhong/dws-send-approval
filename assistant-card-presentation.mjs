@@ -51,7 +51,9 @@ export function plainContent(content) {
 }
 export function renderContent(view, notice = "") {
   const c = view.content;
-  const section = (s) => [s.title && `**${inlineLiteral(s.title)}**`, cardText(s.text)].filter(Boolean).join("<br>");
+  // Give headings a paragraph of breathing room while keeping lines within
+  // their body compact. Do not add back the old stacked component margins.
+  const section = (s) => [s.title && `**${inlineLiteral(s.title)}**`, cardText(s.text)].filter(Boolean).join("\n\n");
   const body = (c.sections ?? []).map((s, i) =>
     (i ? s.dividerBefore ? "\n\n---\n\n" : "\n\n" : "") + section(s)).join("");
   // A single existing MarkdownBlock avoids stacking four component margins.

@@ -10,7 +10,7 @@ test("DingTalk multiline text keeps left alignment without changing the source b
   const text = "苹果17个\r\n梨子23个\n香蕉31根";
   const view = { content: { sections: [{ title: "完整正文", text }], notices: ["第一行\n第二行"] } };
   const rendered = renderContent(view);
-  assert.equal(rendered.content_body, "第一行<br>第二行\n\n**完整正文**<br>苹果17个<br>梨子23个<br>香蕉31根");
+  assert.equal(rendered.content_body, "第一行<br>第二行\n\n**完整正文**\n\n苹果17个<br>梨子23个<br>香蕉31根");
   assert.equal(rendered.content_notice, "");
   assert.equal(view.content.sections[0].text, text);
   assert.equal(textParagraphs("第一段\n\n第二段"), "第一段\n\n第二段");
@@ -23,7 +23,7 @@ test("multiline names cannot create Markdown continuation lines in headings or s
   assert.equal(rendered.content_status, "");
   assert.equal(rendered.content_summary, "");
   assert.equal(rendered.content_notice, "");
-  assert.equal(rendered.content_body, "**状态 说明**\n\n- 名称 第二行\n- 另一个对象\n\n操作提示<br>下一步\n\n**主题 名称**<br>第一行<br>第二行");
+  assert.equal(rendered.content_body, "**状态 说明**\n\n- 名称 第二行\n- 另一个对象\n\n操作提示<br>下一步\n\n**主题 名称**\n\n第一行<br>第二行");
   for (const card of [{}, { upgrade: true }, { upgrade: true, upgradeRecovery: {} }]) {
     const data = inactiveContent({ ...card, name: "edit", presentationVersion: 3, expires: 2000 }, 1000);
     assert.doesNotMatch(data.content_body, /[^\n]\n[^\n]/);
