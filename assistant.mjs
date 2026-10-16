@@ -96,7 +96,8 @@ export function createAssistant(api, config, dependencies = {}) {
     await topicQueue.run(content, rules, signal?.signal, valid), rules);
   const settings = () => validateSettings(store.get("settings") ?? initialSettings());
   const directory = () => store.get("directory") ?? [];
-  const managedTransport = dependencies.transport ? undefined : createCardTransport(config, handle);
+  const managedTransport = dependencies.transport ? undefined
+    : createCardTransport(config, handle, { extension: dependencies.cardExtension });
   const transport = () => dependencies.transport ?? managedTransport;
   const track = (promise) => {
     jobs.add(promise);

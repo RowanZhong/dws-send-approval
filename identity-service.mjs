@@ -40,7 +40,9 @@ const clean = (value) =>
 export function createIdentityService(api, config, dependencies = {}) {
   const runner = dependencies.runner ?? runIdentityCli;
   const now = dependencies.now ?? Date.now;
-  const companyNotice = createIdentityNotice(config, { transport: dependencies.noticeTransport });
+  const companyNotice = createIdentityNotice(config, {
+    transport: dependencies.noticeTransport, cardExtension: dependencies.cardExtension,
+  });
   let context,
     running,
     retiring,
@@ -182,6 +184,7 @@ export function createIdentityService(api, config, dependencies = {}) {
     };
     const assistant = resolved.assistant.enabled
       ? createAssistant(api, resolved, {
+          cardExtension: dependencies.cardExtension,
           send: async (draft) => {
             if (
               closed ||

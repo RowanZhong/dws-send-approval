@@ -1,3 +1,26 @@
+// src/card/card-extension-api.ts
+import { registerPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
+
+// src/card/card-extension-runtime.ts
+import { getChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+var CARD_EXTENSION_CAPABILITY = "dingtalk.card-extensions.transport.v1";
+function getCardExtensionTransport(channelRuntime, accountId) {
+  const context = getChannelRuntimeContext({
+    channelRuntime,
+    channelId: "dingtalk",
+    accountId,
+    capability: CARD_EXTENSION_CAPABILITY
+  });
+  if (!context || typeof context !== "object") {
+    return void 0;
+  }
+  const candidate = context;
+  return typeof candidate.isConnected === "function" && typeof candidate.send === "function" && typeof candidate.update === "function" ? candidate : void 0;
+}
+function cardExtensionNamespace(accountId, namespace) {
+  return `ocx1.${accountId}.${namespace}`;
+}
+
 // src/card/card-extension-types.ts
 var DingTalkCardExtensionError = class extends Error {
   constructor(code, message) {
@@ -6,38 +29,6 @@ var DingTalkCardExtensionError = class extends Error {
     this.name = "DingTalkCardExtensionError";
   }
 };
-
-// src/card/card-extension-registry.ts
-var REGISTRY_KEY = /* @__PURE__ */ Symbol.for("openclaw.dingtalk.card-extensions");
-function getCardExtensionRegistry() {
-  const globals = globalThis;
-  const existing = globals[REGISTRY_KEY];
-  if (existing && existing.version !== 1) {
-    throw new DingTalkCardExtensionError(
-      "version-mismatch",
-      "Incompatible DingTalk card extension API"
-    );
-  }
-  return globals[REGISTRY_KEY] ??= {
-    version: 1,
-    registrations: /* @__PURE__ */ new Map(),
-    transports: /* @__PURE__ */ new Map()
-  };
-}
-function cardExtensionKey(accountId, namespace) {
-  return `${accountId}.${namespace}`;
-}
-function getCardExtensionStatus(accountId) {
-  const registry = getCardExtensionRegistry();
-  if (!registry.accountStatus) {
-    return "unavailable";
-  }
-  const status = registry.accountStatus(accountId);
-  if (status !== "configured") {
-    return status;
-  }
-  return registry.transports.get(accountId)?.isConnected() ? "ready" : "not-connected";
-}
 
 // src/card/card-extension-api.ts
 function validateString(value, pattern, field) {
@@ -62,31 +53,56 @@ function copyVariables(value) {
   }
   return copy;
 }
-function registerDingTalkCardExtension(options) {
+function registerDingTalkCardExtension(api, options) {
   validateString(options?.accountId, /^[a-zA-Z0-9_-]{1,64}$/, "accountId");
   validateString(options?.namespace, /^[a-z][a-z0-9-]{0,31}$/, "namespace");
   if (typeof options.onAction !== "function") {
     throw new DingTalkCardExtensionError("invalid-argument", "onAction must be a function");
   }
-  const registration = { ...options };
-  const { accountId, namespace } = registration;
-  const registry = getCardExtensionRegistry();
-  const key = cardExtensionKey(accountId, namespace);
-  if (registry.registrations.has(key)) {
+  if (!api?.id || !api.runtime?.channel?.runtimeContexts) {
+    throw new DingTalkCardExtensionError("unavailable", "OpenClaw channel runtime is required");
+  }
+  const { accountId, namespace, onAction } = options;
+  const channelRuntime = api.runtime.channel;
+  const registration = registerPluginInteractiveHandler(
+    api.id,
+    {
+      channel: "dingtalk",
+      namespace: cardExtensionNamespace(accountId, namespace),
+      async handler(value) {
+        if (!value || typeof value !== "object") {
+          return;
+        }
+        const action = value;
+        if (action.accountId !== accountId || action.namespace !== namespace) {
+          return;
+        }
+        await onAction({
+          cardId: action.cardId,
+          userId: action.userId,
+          actionIds: action.actionIds,
+          form: action.form,
+          ...action.callbackId ? { callbackId: action.callbackId } : {}
+        });
+      }
+    },
+    { pluginName: api.name, pluginRoot: api.rootDir }
+  );
+  if (!registration.ok) {
     throw new DingTalkCardExtensionError(
       "namespace-conflict",
       "Card extension namespace already registered for this account"
     );
   }
-  registry.registrations.set(key, registration);
-  let disposed = false;
-  const getStatus = () => disposed ? "disposed" : getCardExtensionStatus(accountId);
   const getTransport = () => {
-    const status = getStatus();
-    if (status !== "ready") {
-      throw new DingTalkCardExtensionError(status, `DingTalk card extension is ${status}`);
+    const transport = getCardExtensionTransport(channelRuntime, accountId);
+    if (!transport) {
+      throw new DingTalkCardExtensionError("unavailable", "DingTalk card transport is unavailable");
     }
-    return registry.transports.get(accountId);
+    if (!transport.isConnected()) {
+      throw new DingTalkCardExtensionError("not-connected", "DingTalk account disconnected");
+    }
+    return transport;
   };
   const trackId = (cardId) => {
     validateString(cardId, /^[a-zA-Z0-9_-]{1,64}$/, "cardId");
@@ -100,7 +116,7 @@ function registerDingTalkCardExtension(options) {
     return value;
   };
   return {
-    getStatus,
+    isReady: () => getCardExtensionTransport(channelRuntime, accountId)?.isConnected() === true,
     async sendCard(input) {
       const outTrackId = trackId(input?.cardId);
       validateString(input.templateId, /^[a-zA-Z0-9._-]{1,128}$/, "templateId");
@@ -113,19 +129,11 @@ function registerDingTalkCardExtension(options) {
         variables,
         outTrackId
       });
-      return { outTrackId };
     },
     async updateCard(input) {
       const outTrackId = trackId(input?.cardId);
       const variables = copyVariables(input.variables);
       await getTransport().update({ cardId: input.cardId, variables, outTrackId });
-      return { outTrackId };
-    },
-    dispose() {
-      disposed = true;
-      if (registry.registrations.get(key) === registration) {
-        registry.registrations.delete(key);
-      }
     }
   };
 }

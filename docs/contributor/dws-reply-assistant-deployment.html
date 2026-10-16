@@ -171,7 +171,7 @@
 </tr>
 </tbody>
 </table></div>
-<p>接口的上游 PR 是 <a href="https://github.com/soimy/openclaw-channel-dingtalk/pull/630" target="_blank" rel="noreferrer">#630</a>。不能把“已提交 PR”当成 npm 发行包已支持。过渡基线、接口提交和校验值保存在 <code>compat/manifest.json</code>；本次为基线 <code>8a73a59</code> 加接口提交 <code>3f7994e</code>。上游正式提供相同接口后，选择与宿主兼容的发行版，省去补丁步骤。</p>
+<p>接口的上游 PR 是 <a href="https://github.com/soimy/openclaw-channel-dingtalk/pull/630" target="_blank" rel="noreferrer">#630</a>。不能把“已提交 PR”当成 npm 发行包已支持。过渡基线、接口实现标识和校验值以 <code>compat/manifest.json</code> 为准。上游正式提供相同接口后，选择与宿主兼容的发行版，省去补丁步骤。</p>
 <p>新版过渡补丁只提供通用卡片接口、Stream 分派和构建导出，不携带助手逻辑，也不携带 20 MiB、问卷 1000 人或 4320 分钟增强。助手功能不依赖这些增强。旧版兼容分支原有提交保持不动。</p>
 <h3 id="新版-生成隔离的最小补丁工作目录" tabindex="-1">新版：生成隔离的最小补丁工作目录 <a class="header-anchor" href="#新版-生成隔离的最小补丁工作目录" aria-label="Permalink to &quot;新版：生成隔离的最小补丁工作目录&quot;">&ZeroWidthSpace;</a></h3>
 <p>在本项目根目录执行，目标目录必须不存在。脚本不会修改任何已有社区插件目录。</p>
@@ -210,7 +210,8 @@ openclaw plugins install ./artifacts/dws-send-approval-0.9.1.tgz
 <li>重启后确认 <code>openclaw channels status --probe --json</code> 为运行且已连接；本人发送 <code>/dws identity</code>、<code>/dws-listen status</code>、<code>/dws</code> 核对身份、偏好和卡片。</li>
 </ol>
 <p>若卡片从旧桥接切换到通用接口，旧操作卡会在服务端停用，历史消息中的卡片可能仍然可见；请重新 <code>/dws</code> 打开新卡。仅切换卡片接口或模板时，未处理草稿、员工配置和发送历史保留；待办可以通过新卡或文字命令继续处理。已经成功发送和状态不明的消息不会因迁移自动重发。同一接口内重启仍保留有效卡片及通知去重。若同时切换 DWS 授权应用，还需执行<a href="#company-app-migration">公司授权迁移</a>，旧未完成草稿转只读、原自动授权暂停，不能套用仅换模板的恢复方式。</p>
-<p>新版已安装原定制 Channel 时，独立助手仍可使用其旧桥接，便于先迁移助手再迁移 Channel。只要通用接口已经提供，就优先采用该接口；连接暂断或请求失败时不会偷偷改用旧桥接重试。</p>
+<p>宿主版本决定卡片接口：OpenClaw 2026.7.1-2 继续使用既有桥接；2026.8.1 使用基于宿主公开注册接口的新版客户端。新版宿主应同时部署匹配的 Channel，客户端加载、注册失败或 Channel 尚未就绪时明确报错，不改用旧桥接。<code>isReady()</code> 为 false、连接暂断或请求失败均不会触发跨接口重试。</p>
+<p>新版 <code>registerDingTalkCardExtension(api, { accountId, namespace, onAction })</code> 在助手的同步 <code>register(api)</code> 阶段调用一次。该句柄仅提供 <code>isReady()</code>、<code>sendCard()</code>、<code>updateCard()</code>，发送和更新不返回卡片标识；助手继续持久化原有逻辑 ID，Channel 负责 <code>ocx1.account.namespace.cardId</code> 线协议。回调只包含 <code>cardId</code>、<code>userId</code>、<code>actionIds</code>、<code>form</code> 和可选的 <code>callbackId</code>，账号与命名空间已由接口筛选，助手仍校验本人和单个操作。身份刷新只更换运行时，不重新注册；回调查找当前活跃且身份就绪的助手，初始化或停止期间抛出错误，由宿主释放失败回调的去重占位。服务停止不会注销宿主拥有的处理器。</p>
 <p>回滚时恢复原 Channel 与旧助手代码；切换过卡片接口的场景请重新打开操作卡。若需要回滚员工业务状态，恢复经核对的同一员工备份，不混用其他员工的数据库或身份缓存。</p>
 <h3 id="卡片模板与必要权限" tabindex="-1">卡片模板与必要权限 <a class="header-anchor" href="#卡片模板与必要权限" aria-label="Permalink to &quot;卡片模板与必要权限&quot;">&ZeroWidthSpace;</a></h3>
 <p>既有已发布模板可继续用于默认的展示版本 2。请在 <a href="https://open-dev.dingtalk.com/fe/card" target="_blank" rel="noreferrer">企业开发者后台卡片平台</a> 选择目标企业和实际机器人应用，在消息卡片下新建普通卡片。版本 2 导入并发布 <code>templates/dws-reply-assistant-card.json</code>；个人 AI 卡片入口不是这里的发布入口。</p>
@@ -901,7 +902,7 @@ dws --profile CORP_ID:USER_ID chat bot find --query ROBOT_NAME --limit 20 --form
 <p>升级、回滚按第 3 节的版本组合和迁移步骤执行。维护时备份整个助手状态目录，保留发送记录供核对，不把 unknown 状态批量重试；旧宿主无需因助手抽离而更换既有兼容 Channel。</p>
 </section><section class="doc-section" id="sec-6"><h2 id="_6-独立维护边界" tabindex="-1">6. 独立维护边界 <a class="header-anchor" href="#_6-独立维护边界" aria-label="Permalink to &quot;6. 独立维护边界&quot;">&ZeroWidthSpace;</a></h2>
 <p>助手只依赖卡片投递、更新和可信 Stream 回调，不依赖大文件上传上限、问卷人数或问卷超时增强。新版只跟随原作者代码与通用卡片接口，不继续维护这些无关改动；旧版兼容分支保留已有历史提交。</p>
-<p>助手项目不包含完整的 Channel，也不直接持有社区机器人的密钥或另建 Stream 连接。通用客户端在 <code>vendor/</code> 中保存固定版本与 MIT 声明，通过进程内注册表调用已经加载的 Channel；旧桥接仅为兼容已有部署。</p>
+<p>助手项目不包含完整的 Channel，也不直接持有社区机器人的密钥或另建 Stream 连接。通用客户端在 <code>vendor/</code> 中保存固定版本与 MIT 声明，通过宿主公开的 <code>plugin-runtime</code> 交互处理器和 <code>channel-runtime-context</code>（能力 <code>dingtalk.card-extensions.transport.v1</code>）调用已经加载的 Channel。旧宿主不加载该客户端及其新版 SDK 依赖，继续使用既有桥接；新版宿主的加载错误不会被当作旧版兼容路径。</p>
 <p>接口可用时，临时断线或请求错误不会触发跨接口重试。切换接口导致旧操作卡停用，业务状态保留。接口升级应连同宿主版本、补丁校验值与卡片真机回归一起验收。</p>
 <h3 id="_0-9-0-的配置与验收范围" tabindex="-1">0.9.0 的配置与验收范围 <a class="header-anchor" href="#_0-9-0-的配置与验收范围" aria-label="Permalink to &quot;0.9.0 的配置与验收范围&quot;">&ZeroWidthSpace;</a></h3>
 <p>0.9.0 包含此前功能与身份修复（代码基线 <code>6662d54</code>）及公司统一授权应用迁移（代码基线 <code>db9ab97</code>），两轮均已完成各自的双版必要真机验收。专用 Agent 的两版完整配置、路由、启用验证和排错见<a href="#draft-agent-setup">第 3 节</a>；参数、模板迁移及接口限制见<a href="read-only-drafting.md">只读起草能力与限制</a>。完整证据与未覆盖范围见 <a href="../plans/2026-09-28-development-record.md">2026-09-28 执行记录</a>、<a href="../plans/2026-09-28-identity-recovery.md">身份修复记录</a>及<a href="../plans/2026-09-29-company-app-migration.md">公司授权迁移记录</a>。本地真机验证不替代生产 Linux、企业权限或 Kubernetes 容量验证；下方历次验收保留各自日期，不混作本次测试。该轮部署应记录 <code>0.9.0</code> 和实际 Git 提交，并从对应源码打包；版本号不能代替提交标识或企业灰度验收。</p>

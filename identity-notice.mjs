@@ -14,7 +14,9 @@ export function createIdentityNotice(config, dependencies = {}) {
         try {
           if (!config.assistant.enabled || !config.assistant.cardTemplateId) return COMPANY_AUTH_TEXT;
           if (!transport) {
-            transport = dependencies.transport ?? createCardTransport(config, () => false);
+            transport = dependencies.transport ?? createCardTransport(config, () => false, {
+              extension: dependencies.cardExtension,
+            });
             transport.start();
           }
           const body = `${COMPANY_AUTH_PARAGRAPHS[0]}\n\n${COMPANY_AUTH_PARAGRAPHS[1]}\n\n**下一步：**\n\n${COMPANY_AUTH_PARAGRAPHS[2]}`;

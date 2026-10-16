@@ -111,7 +111,7 @@ settings 仍为 version 1，可选 `topics:{enabled,mode,revision,rules}` 在读
 | OpenClaw 2026.8.1 | 原作者 `soimy/openclaw-channel-dingtalk`；通用接口未正式提供前，使用锁定基线加最小补丁 | `@soimy/dingtalk/card-extensions` 通用卡片接口 |
 | OpenClaw 2026.7.1-2 | 继续维护 `RowanZhong/openclaw-channel-dingtalk` 的 `codex/dws-reply-assistant-2026.7.1-2` 兼容分支 | 原有助手卡片桥接 |
 
-接口的上游 PR 是 [#630](https://github.com/soimy/openclaw-channel-dingtalk/pull/630)。不能把“已提交 PR”当成 npm 发行包已支持。过渡基线、接口提交和校验值保存在 `compat/manifest.json`；本次为基线 `8a73a59` 加接口提交 `3f7994e`。上游正式提供相同接口后，选择与宿主兼容的发行版，省去补丁步骤。
+接口的上游 PR 是 [#630](https://github.com/soimy/openclaw-channel-dingtalk/pull/630)。不能把“已提交 PR”当成 npm 发行包已支持。过渡基线、接口实现标识和校验值以 `compat/manifest.json` 为准。上游正式提供相同接口后，选择与宿主兼容的发行版，省去补丁步骤。
 
 新版过渡补丁只提供通用卡片接口、Stream 分派和构建导出，不携带助手逻辑，也不携带 20 MiB、问卷 1000 人或 4320 分钟增强。助手功能不依赖这些增强。旧版兼容分支原有提交保持不动。
 
@@ -164,7 +164,9 @@ openclaw plugins install ./artifacts/dws-send-approval-0.9.1.tgz
 
 若卡片从旧桥接切换到通用接口，旧操作卡会在服务端停用，历史消息中的卡片可能仍然可见；请重新 `/dws` 打开新卡。仅切换卡片接口或模板时，未处理草稿、员工配置和发送历史保留；待办可以通过新卡或文字命令继续处理。已经成功发送和状态不明的消息不会因迁移自动重发。同一接口内重启仍保留有效卡片及通知去重。若同时切换 DWS 授权应用，还需执行[公司授权迁移](#company-app-migration)，旧未完成草稿转只读、原自动授权暂停，不能套用仅换模板的恢复方式。
 
-新版已安装原定制 Channel 时，独立助手仍可使用其旧桥接，便于先迁移助手再迁移 Channel。只要通用接口已经提供，就优先采用该接口；连接暂断或请求失败时不会偷偷改用旧桥接重试。
+宿主版本决定卡片接口：OpenClaw 2026.7.1-2 继续使用既有桥接；2026.8.1 使用基于宿主公开注册接口的新版客户端。新版宿主应同时部署匹配的 Channel，客户端加载、注册失败或 Channel 尚未就绪时明确报错，不改用旧桥接。`isReady()` 为 false、连接暂断或请求失败均不会触发跨接口重试。
+
+新版 `registerDingTalkCardExtension(api, { accountId, namespace, onAction })` 在助手的同步 `register(api)` 阶段调用一次。该句柄仅提供 `isReady()`、`sendCard()`、`updateCard()`，发送和更新不返回卡片标识；助手继续持久化原有逻辑 ID，Channel 负责 `ocx1.account.namespace.cardId` 线协议。回调只包含 `cardId`、`userId`、`actionIds`、`form` 和可选的 `callbackId`，账号与命名空间已由接口筛选，助手仍校验本人和单个操作。身份刷新只更换运行时，不重新注册；回调查找当前活跃且身份就绪的助手，初始化或停止期间抛出错误，由宿主释放失败回调的去重占位。服务停止不会注销宿主拥有的处理器。
 
 回滚时恢复原 Channel 与旧助手代码；切换过卡片接口的场景请重新打开操作卡。若需要回滚员工业务状态，恢复经核对的同一员工备份，不混用其他员工的数据库或身份缓存。
 
@@ -726,7 +728,7 @@ OpenClaw 状态目录和 DWS 配置目录挂载员工独立的持久卷。不要
 
 助手只依赖卡片投递、更新和可信 Stream 回调，不依赖大文件上传上限、问卷人数或问卷超时增强。新版只跟随原作者代码与通用卡片接口，不继续维护这些无关改动；旧版兼容分支保留已有历史提交。
 
-助手项目不包含完整的 Channel，也不直接持有社区机器人的密钥或另建 Stream 连接。通用客户端在 `vendor/` 中保存固定版本与 MIT 声明，通过进程内注册表调用已经加载的 Channel；旧桥接仅为兼容已有部署。
+助手项目不包含完整的 Channel，也不直接持有社区机器人的密钥或另建 Stream 连接。通用客户端在 `vendor/` 中保存固定版本与 MIT 声明，通过宿主公开的 `plugin-runtime` 交互处理器和 `channel-runtime-context`（能力 `dingtalk.card-extensions.transport.v1`）调用已经加载的 Channel。旧宿主不加载该客户端及其新版 SDK 依赖，继续使用既有桥接；新版宿主的加载错误不会被当作旧版兼容路径。
 
 接口可用时，临时断线或请求错误不会触发跨接口重试。切换接口导致旧操作卡停用，业务状态保留。接口升级应连同宿主版本、补丁校验值与卡片真机回归一起验收。
 

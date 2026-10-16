@@ -3,10 +3,15 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import entry from "../index.mjs";
 const host = resolve(process.argv[2]),
   version = JSON.parse(await readFile(join(host, "package.json"), "utf8")).version;
+const [year, month] = version.split(".").map(Number);
+const modern = year > 2026 || year === 2026 && month >= 8;
+const clearInteractive = modern
+  ? (await import(pathToFileURL(join(host, "dist/plugin-sdk/plugin-runtime.js")))).clearPluginInteractiveHandlers
+  : undefined;
 async function load(prefix, symbol) {
   for (const name of (await readdir(join(host, "dist"))).filter(
     (n) => n.startsWith(prefix) && n.endsWith(".js"),
@@ -24,6 +29,7 @@ const registerCommand = await load("command-registration-", "registerPluginComma
 const clearCommands = await load("command-registration-", "clearPluginCommands");
 const matchCommand = await load("commands-", "matchPluginCommand");
 const executeCommand = await load("commands-", "executePluginCommand");
+const createRuntimeChannel = modern ? await load("runtime-channel-", "createRuntimeChannel") : undefined;
 const folder = await mkdtemp(join(tmpdir(), "dws-assistant-host-")),
   commands = [],
   services = [],
@@ -36,10 +42,14 @@ const cfg = {
 };
 const logger = { info() {}, warn() {}, error() {} };
 const api = {
+  id: "dws-send-approval",
+  name: "DWS Reply Assistant",
+  rootDir: fileURLToPath(new URL("../", import.meta.url)),
   pluginConfig: cfg,
   logger,
   runtime: {
     version,
+    channel: createRuntimeChannel?.(),
     llm: {
       complete() {
         throw Error("No live model expected");
@@ -59,7 +69,7 @@ try {
     `#!${process.execPath}\nconst a=process.argv.slice(2);process.stdout.write(JSON.stringify(a[0]==='profile'?{success:true,currentProfile:'fake:owner',profiles:[{profile:'fake:owner',corpId:'fake',userId:'owner',clientId:'oauth-code',isCurrent:true,status:'active'}]}:a.includes('contact')?{success:true,result:[{userId:'owner',openDingTalkId:'open-owner'}]}:a.includes('search')?{success:true,robotList:[{robotCode:'robot-code',robotName:'fixture'}]}:{success:true,result:{bots:[{name:'fixture',botOpenDingTalkId:'open-fixture'}],hasMore:false}}));\n`,
     { mode: 0o700 },
   );
-  entry.register(api);
+  assert.equal(entry.register(api), undefined, "plugin registration must remain synchronous");
   assert.deepEqual(
     commands.map((c) => c.name),
     ["dws-listen", "dws-reply", "dws", "ok", "no", "edit"],
@@ -96,9 +106,11 @@ try {
       ...overrides,
     });
   };
-  // Old-host runtime prewarm re-registers commands, but starts only the first service.
+  // Host registry replay clears commands/interactive handlers, but only the
+  // first service is running. New callbacks must locate that active runtime.
   clearCommands();
-  entry.register(api);
+  clearInteractive?.();
+  assert.equal(entry.register(api), undefined);
   assert.equal(services.length, 2);
   assert.match((await invoke("dws", "identity")).text, /正在检测|已就绪/);
   // Cold host imports and child process scheduling can exceed two seconds.
@@ -144,6 +156,7 @@ try {
       result: "passed",
       checks: [
         "actual-plugin-entry-sdk-import",
+        "synchronous-card-registration",
         "six-command-registration",
         "actual-host-command-match-and-dispatch",
         "runtime-prewarm-command-reregistration",
@@ -160,5 +173,6 @@ try {
   );
 } finally {
   await services[0]?.stop();
+  clearInteractive?.();
   await rm(folder, { recursive: true, force: true });
 }

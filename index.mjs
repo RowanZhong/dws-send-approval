@@ -6,6 +6,7 @@ import { assertHostVersion, readConfig } from "./config.mjs";
 import { createPolicy } from "./policy.mjs";
 import { runtimeBinding } from "./runtime-binding.mjs";
 import { SourceStore } from "./source-store.mjs";
+import { registerAssistantCardExtension } from "./card-transport.mjs";
 import { isDraftSession, DRAFT_TOOLS } from "./assistant-draft-policy.mjs";
 
 export default definePluginEntry({
@@ -27,6 +28,8 @@ export default definePluginEntry({
       throw new Error("OpenClaw plugin subagent runtime is required");
     }
     const binding = runtimeBinding(config);
+    const cardExtension = config.assistant.enabled
+      ? registerAssistantCardExtension(api, config, binding) : undefined;
     const policy = createPolicy(config, store);
     const drafting = () => { try { return binding.peek()?.requireRuntime()?.assistant?.drafting; } catch { return undefined; } };
     api.on("before_tool_call", (event, ctx) => {
@@ -40,7 +43,7 @@ export default definePluginEntry({
     });
     if (api.registerTool) api.registerTool((ctx) => isDraftSession(ctx?.sessionKey) ? drafting()?.tools(ctx) ?? [] : [], { names: [...DRAFT_TOOLS], optional: true });
     else if (config.assistant.drafting.toolsEnabled) throw new Error("宿主缺少只读起草工具注册接口。");
-    const identity = createIdentityService(api, config);
+    const identity = createIdentityService(api, config, { cardExtension });
     registerControlCommands(api, config, {
       status: (...args) =>
         binding
