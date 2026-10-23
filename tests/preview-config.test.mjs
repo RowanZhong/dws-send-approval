@@ -110,13 +110,15 @@ test("listener arguments never pass through a shell; wide private listening excl
     "--profile",
     "work",
     "event",
-    "+listen-im",
-    "--kind",
-    "sender",
-    "--events",
-    "message",
+    "consume",
+    "user_im_message_receive_user",
     "--open-dingtalk-id",
     "open-b",
+    "--stream-ticket-mode",
+    "custom",
+    "--flatten",
+    "--format",
+    "ndjson",
   ]);
   assert.throws(() => readConfig({ ...config, listener: { kind: "all-direct" } }));
   assert.doesNotThrow(() =>
@@ -125,6 +127,21 @@ test("listener arguments never pass through a shell; wide private listening excl
       listener: { kind: "all-direct", ignoreSenderOpenIds: ["bot-open-id"] },
     }),
   );
+});
+
+test("legacy listener helper maps each single intent to consume with custom tickets", () => {
+  const cases = [
+    ["all-direct", "user_im_message_receive_o2o_all", []],
+    ["all-group", "user_im_message_receive_group_all", []],
+    ["at-me", "user_im_message_receive_at", []],
+    ["sender", "user_im_message_receive_user", ["--open-dingtalk-id", "peer"]],
+    ["group", "user_im_message_receive_group", ["--group", "conversation"]],
+  ];
+  for (const [kind, key, target] of cases) {
+    const c = readConfig({ ...config, listener: { kind, ...(target.length ? { target: target[1] } : {}), ignoreSenderOpenIds: ["bot"] } });
+    assert.deepEqual(listenerArgs(c), ["--profile", config.profile, "event", "consume", key, ...target,
+      "--stream-ticket-mode", "custom", "--flatten", "--format", "ndjson"]);
+  }
 });
 
 test("combined mode uses one flattened multi-event consume without a shell or target", () => {
@@ -137,6 +154,8 @@ test("combined mode uses one flattened multi-event consume without a shell or ta
     "consume",
     "user_im_message_receive_o2o_all",
     "user_im_message_receive_at",
+    "--stream-ticket-mode",
+    "custom",
     "--flatten",
     "--format",
     "ndjson",

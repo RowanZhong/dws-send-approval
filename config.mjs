@@ -252,33 +252,20 @@ export function assertApprovalRouting(host, config) {
 }
 
 export function listenerArgs(config) {
-  if (config.listener.kind === COMBINED_LISTENER_KIND) {
-    return [
-      "--profile",
-      config.profile,
-      "event",
-      "consume",
-      ...listenerEventKeys(config),
-      "--flatten",
-      "--format",
-      "ndjson",
-    ];
-  }
+  // DWS 1.0.58 exposes custom stream tickets on consume, not +listen-im.
   const args = [
     "--profile",
     config.profile,
     "event",
-    "+listen-im",
-    "--kind",
-    config.listener.kind,
-    "--events",
-    "message",
+    "consume",
+    ...listenerEventKeys(config),
   ];
   if (config.listener.kind === "sender") {
     args.push("--open-dingtalk-id", config.listener.target);
   }
   if (config.listener.kind === "group") {
-    args.push("--chat-id", config.listener.target);
+    args.push("--group", config.listener.target);
   }
+  args.push("--stream-ticket-mode", "custom", "--flatten", "--format", "ndjson");
   return args;
 }

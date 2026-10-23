@@ -1,6 +1,6 @@
 # 只读起草能力、参数与部署限制
 
-插件 0.9.1 配套说明，更新于 2026-09-29。起草功能与身份修复基线 `6662d54` 的两版必要真机验收已于 2026-09-28 完成，包含真实来信、可见卡片、实际按钮及发送结果核对。旧设置、插件 ID、状态路径和 settings version 1 保持兼容；新字段缺失时补默认值，不重置偏好或扩大旧授权。公司统一授权应用迁移的额外处理规则见[技术方案与安装配置](dws-reply-assistant-deployment.md#company-app-migration)。
+插件 0.9.2 配套说明，更新于 2026-10-23。本页描述当前参数与边界；以下真机证据保留各自历史日期，不代表 0.9.2 的 custom 事件投递已在公司环境复验。起草功能与身份修复基线 `6662d54` 的两版必要真机验收已于 2026-09-28 完成，包含真实来信、可见卡片、实际按钮及发送结果核对。旧设置、插件 ID、状态路径和 settings version 1 保持兼容；新字段缺失时补默认值，不重置偏好或扩大旧授权。公司统一授权应用迁移的额外处理规则见[技术方案与安装配置](dws-reply-assistant-deployment.md#company-app-migration)。
 
 ## 参数与默认值
 
@@ -15,7 +15,7 @@
 | `storage.cleanupIntervalSeconds` | 300 | 30–86400 秒；分批清理，与到期检查独立 |
 | `storage.dedupeRetentionDays` | 30 | 1–365 天且不短于正文保留；正文删除后保留无正文指纹 |
 | `context.historyMinutes` | 5 | 0–60 分钟，0 关闭；私聊双方、群聊发送者与本人 |
-| `drafting.toolsEnabled` | false | 新装及升级均默认无工具起草 |
+| `drafting.toolsEnabled` | false | 未配置时默认无工具起草；升级保留已有显式配置 |
 | `drafting.timeoutSeconds` | 120 | 10–600 秒；超时后仍追踪任务，不立即重启 |
 | `drafting.agentId` | 继承插件 `agentId` | 开启工具时必须显式选择非主 Agent，建议 `dws-draft` |
 | `drafting.documentWorkspaceIds` | 空数组 | 只读文档检索的知识库允许范围；空数组不检索文档 |
@@ -63,7 +63,7 @@
 
 ## 富文本模板发布与迁移
 
-0.9.0 已启用 v3 的实例升级到 0.9.1 时，保留现有模板 ID 与展示版本即可；不需要再次发布模板或执行下方首次迁移步骤。0.9.1 把内容集中到既有正文槽，收紧换行与分区间距，编辑值和发送正文保持不变。
+从 0.9.0 / 0.9.1 升级到 0.9.2 时，已启用 v3 的实例保留现有模板 ID 与展示版本 3；不需要再次发布模板或执行下方首次迁移步骤。0.9.2 沿用 0.9.1 的统一正文槽、段内紧凑换行及标题留白，编辑值和发送正文保持不变。0.9.2 的变化是事件消费统一使用 custom 票据模式，部署后需重启实例以重建监听。
 
 只有一个生效模板配置 `assistant.cardTemplateId`。`templates/dws-reply-assistant-card-v3.json` 是可导入源码，平台编译导出另存于 `templates/dws-reply-assistant-card-v3.platform-export.json`。独立测试模板已发布并完成两版桌面呈现及回调检查；部署到其他组织仍须先发布自己的模板并完成验证。`compat/manifest.json` 固定了 MarkdownBlock 组件的上游提交和校验值；原 MIT 声明保留。
 

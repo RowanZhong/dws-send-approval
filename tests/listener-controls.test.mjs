@@ -13,6 +13,34 @@ const mention = {
   conversation_id: "G1",
 };
 
+test("every spawned subscription uses custom tickets while retaining its event keys and target", async (t) => {
+  const cases = [
+    { name: "all private", setup: ["dm all"], expected: [[[EVENTS.direct]]] },
+    { name: "selected private", setup: ["dm users U1,U2"], expected: [[[EVENTS.privateUser], "U1"], [[EVENTS.privateUser], "U2"]] },
+    { name: "all mentions", setup: ["at all"], expected: [[[EVENTS.mention]]] },
+    { name: "selected groups", setup: ["at groups G1,G2"], expected: [[[EVENTS.mention]]] },
+    { name: "extra sender", setup: ["sender users U1"], expected: [[[EVENTS.sender], "U1"]] },
+    { name: "combined broad", setup: ["dm all", "at all"], expected: [[[EVENTS.direct, EVENTS.mention]]] },
+    { name: "combined targeted", setup: ["dm users U1,U2", "sender users U1", "at all"], expected: [[[EVENTS.mention]], [[EVENTS.privateUser, EVENTS.sender], "U1"], [[EVENTS.privateUser], "U2"]] },
+  ];
+  for (const { name, setup, expected } of cases) await t.test(name, async (t) => {
+    const s = await controls(t);
+    for (const command of setup) await s.listen(command);
+    await s.listen("on");
+    assert.equal(s.children.length, expected.length);
+    for (const [i, child] of s.children.entries()) {
+      const [keys, target] = expected[i];
+      assert.equal(child.file, s.config.dwsPath);
+      assert.deepEqual(child.args, ["--profile", s.config.profile, "event", "consume", ...keys,
+        ...(target ? ["--open-dingtalk-id", target] : []), "--stream-ticket-mode", "custom", "--flatten", "--format", "ndjson"]);
+      child.ready();
+    }
+    assert.equal(s.service.status().state, "ready");
+    await s.listen("off");
+    assert.equal(s.service.status().consumers, 0);
+  });
+});
+
 test("private plus multiple selected-group mentions share one consumer and independent tasks", async (t) => {
   const s = await controls(t);
   await s.listen("dm all");

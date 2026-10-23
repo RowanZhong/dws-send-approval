@@ -27,6 +27,8 @@ export function subscriptionPlan(preferences, config) {
         "consume",
         ...keys,
         ...(target ? ["--open-dingtalk-id", target] : []),
+        "--stream-ticket-mode",
+        "custom",
         "--flatten",
         "--format",
         "ndjson",

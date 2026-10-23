@@ -78,19 +78,24 @@ function render(name) {
     element.textContent = button.label;
     if (index === 0) element.className = "primary";
     element.onclick = () => {
+      const page = view.name;
+      const confirmed = view.args?.wizard?.delivery === "confirm";
+      const fixedPage = (destination) => confirmed && views[`${destination}-confirm`] ? `${destination}-confirm` : destination;
       const route = button.op === "fixed-open" ? "fixed-detail"
         : button.op === "fixed-edit" ? "fixed-new"
-        : button.op === "fixed-start" ? "auto-new"
+        : button.op === "fixed-start" ? (fields.querySelector('input[name="delivery"]:checked')?.value === "confirm" ? "auto-new-confirm" : "auto-new")
         : button.op === "send-selected" ? "batch-review"
         : button.op === "auto-next"
-        ? ({ "auto-new": "auto-content", "auto-content": "auto-limits", "auto-limits": "auto-frequency", "auto-frequency": "auto-review" })[name]
+        ? fixedPage(({ "auto-new": "auto-content", "auto-content": confirmed ? "auto-review" : "auto-limits", "auto-limits": "auto-frequency", "auto-frequency": "auto-review" })[page])
         : button.op === "topic-next" ? ({ "topic-new": "topic-definition", "topic-definition": "topic-action", "topic-action": "topic-trial", "topic-trial": "topic-limits", "topic-trial-result": "topic-limits", "topic-limits": "topic-review" })[name]
-        : button.op === "topic-test" ? "topic-trial-result"
+        : button.op === "topic-test" ? (view.args?.wizard?.readOnly ? "topic-trial-saved-result" : "topic-trial-result")
         : button.op === "topic-open" ? "topic-detail"
         : button.op === "topic-edit" ? "topic-new"
-        : button.op === "topic-test-saved" ? "topic-trial"
-        : ["auto-back", "topic-back"].includes(button.op) ? button.destination
+        : button.op === "topic-test-saved" ? "topic-trial-saved"
+        : button.op === "auto-back" ? fixedPage(button.destination)
+        : button.op === "topic-back" ? button.destination
         : button.op === "load-reply" ? `reply-edit-${button.targetKind}`
+        : button.op === "reply-edit" ? (button.targetKind && button.targetKind !== "default" ? `reply-edit-${button.targetKind}` : "reply-edit")
         : button.op === "reply-target" ? `reply-target-${button.targetKind}`
         : button.op === "search-directory" ? "search-results"
         : button.op === "open-selected" ? "draft" : button.op;
